@@ -17,8 +17,9 @@ actor SonosControlClient {
     }
 
     func play(_ group: SonosGroupModel) async throws {
+        guard let baseURL = group.coordinatorBaseURL else { return }
         _ = try await soapClient.sendAction(
-            baseURL: group.coordinatorBaseURL,
+            baseURL: baseURL,
             path: "/MediaRenderer/AVTransport/Control",
             serviceType: "urn:schemas-upnp-org:service:AVTransport:1",
             action: "Play",
@@ -32,8 +33,9 @@ actor SonosControlClient {
     }
 
     func pause(_ group: SonosGroupModel) async throws {
+        guard let baseURL = group.coordinatorBaseURL else { return }
         _ = try await soapClient.sendAction(
-            baseURL: group.coordinatorBaseURL,
+            baseURL: baseURL,
             path: "/MediaRenderer/AVTransport/Control",
             serviceType: "urn:schemas-upnp-org:service:AVTransport:1",
             action: "Pause",
@@ -46,8 +48,9 @@ actor SonosControlClient {
     }
 
     func nextTrack(_ group: SonosGroupModel) async throws {
+        guard let baseURL = group.coordinatorBaseURL else { return }
         _ = try await soapClient.sendAction(
-            baseURL: group.coordinatorBaseURL,
+            baseURL: baseURL,
             path: "/MediaRenderer/AVTransport/Control",
             serviceType: "urn:schemas-upnp-org:service:AVTransport:1",
             action: "Next",
@@ -60,8 +63,9 @@ actor SonosControlClient {
     }
 
     func previousTrack(_ group: SonosGroupModel) async throws {
+        guard let baseURL = group.coordinatorBaseURL else { return }
         _ = try await soapClient.sendAction(
-            baseURL: group.coordinatorBaseURL,
+            baseURL: baseURL,
             path: "/MediaRenderer/AVTransport/Control",
             serviceType: "urn:schemas-upnp-org:service:AVTransport:1",
             action: "Previous",
@@ -74,11 +78,12 @@ actor SonosControlClient {
     }
 
     func setGroupVolume(_ volume: Int, for group: SonosGroupModel) async throws {
+        guard let baseURL = group.coordinatorBaseURL else { return }
         let clampedVolume = max(0, min(volume, 100))
 
         do {
             _ = try await soapClient.sendAction(
-                baseURL: group.coordinatorBaseURL,
+                baseURL: baseURL,
                 path: "/MediaRenderer/GroupRenderingControl/Control",
                 serviceType: "urn:schemas-upnp-org:service:GroupRenderingControl:1",
                 action: "SetGroupVolume",
@@ -91,7 +96,7 @@ actor SonosControlClient {
             )
         } catch {
             _ = try await soapClient.sendAction(
-                baseURL: group.coordinatorBaseURL,
+                baseURL: baseURL,
                 path: "/MediaRenderer/RenderingControl/Control",
                 serviceType: "urn:schemas-upnp-org:service:RenderingControl:1",
                 action: "SetVolume",
@@ -107,11 +112,12 @@ actor SonosControlClient {
     }
 
     func setGroupMuted(_ isMuted: Bool, for group: SonosGroupModel) async throws {
+        guard let baseURL = group.coordinatorBaseURL else { return }
         let muteValue = isMuted ? 1 : 0
 
         do {
             _ = try await soapClient.sendAction(
-                baseURL: group.coordinatorBaseURL,
+                baseURL: baseURL,
                 path: "/MediaRenderer/GroupRenderingControl/Control",
                 serviceType: "urn:schemas-upnp-org:service:GroupRenderingControl:1",
                 action: "SetGroupMute",
@@ -124,7 +130,7 @@ actor SonosControlClient {
             )
         } catch {
             _ = try await soapClient.sendAction(
-                baseURL: group.coordinatorBaseURL,
+                baseURL: baseURL,
                 path: "/MediaRenderer/RenderingControl/Control",
                 serviceType: "urn:schemas-upnp-org:service:RenderingControl:1",
                 action: "SetMute",

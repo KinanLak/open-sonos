@@ -25,6 +25,10 @@ struct SonosGroupRowView: View {
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 2) {
+                    Text(group.source.label)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+
                     Text("\(group.volume)%")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)

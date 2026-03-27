@@ -1,5 +1,21 @@
 import Foundation
 
+enum SonosConnectionSource: String, CaseIterable, Identifiable, Hashable {
+    case local
+    case cloud
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .local:
+            return "Local"
+        case .cloud:
+            return "Cloud"
+        }
+    }
+}
+
 enum SonosPlaybackState: String, Hashable {
     case playing
     case paused
@@ -9,13 +25,13 @@ enum SonosPlaybackState: String, Hashable {
 
     init(transportState: String) {
         switch transportState.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
-        case "PLAYING":
+        case "PLAYING", "PLAYBACK_STATE_PLAYING":
             self = .playing
-        case "PAUSED_PLAYBACK":
+        case "PAUSED_PLAYBACK", "PLAYBACK_STATE_PAUSED":
             self = .paused
-        case "STOPPED":
+        case "STOPPED", "PLAYBACK_STATE_IDLE":
             self = .stopped
-        case "TRANSITIONING":
+        case "TRANSITIONING", "PLAYBACK_STATE_BUFFERING":
             self = .transitioning
         default:
             self = .unknown
@@ -52,19 +68,32 @@ struct SonosTrackModel: Hashable {
     var artist: String?
     var album: String?
     var albumArtURL: URL?
+    var containerName: String?
+    var streamInfo: String?
 
     var subtitle: String {
         let components = [artist, album]
             .compactMap { $0?.nilIfBlank }
-        return components.isEmpty ? "No metadata" : components.joined(separator: " - ")
+
+        if !components.isEmpty {
+            return components.joined(separator: " - ")
+        }
+
+        if let containerName = containerName?.nilIfBlank {
+            return containerName
+        }
+
+        return streamInfo?.nilIfBlank ?? "No metadata"
     }
 }
 
 struct SonosPlayerModel: Identifiable, Hashable {
     var id: String
     var name: String
-    var baseURL: URL
+    var baseURL: URL?
     var isCoordinator: Bool
+    var webSocketURL: URL?
+    var capabilities: [String]
 }
 
 struct SonosDeviceModel: Hashable {
@@ -76,16 +105,34 @@ struct SonosDeviceModel: Hashable {
     var baseURL: URL
 }
 
+struct SonosHouseholdModel: Identifiable, Hashable {
+    var id: String
+    var source: SonosConnectionSource
+    var name: String
+    var samplePlayers: [String]
+
+    var detailLabel: String {
+        if !samplePlayers.isEmpty {
+            return samplePlayers.joined(separator: ", ")
+        }
+
+        return id
+    }
+}
+
 struct SonosGroupModel: Identifiable, Hashable {
     var id: String
+    var source: SonosConnectionSource
+    var householdID: String?
     var name: String
     var coordinatorID: String
-    var coordinatorBaseURL: URL
+    var coordinatorBaseURL: URL?
     var players: [SonosPlayerModel]
     var playbackState: SonosPlaybackState
     var track: SonosTrackModel?
     var volume: Int
     var isMuted: Bool
+    var volumeIsFixed: Bool
 
     var isPlaying: Bool {
         playbackState == .playing

@@ -198,7 +198,9 @@ actor SonosDiscoveryClient {
                 id: member.uuid,
                 name: resolvedName,
                 baseURL: baseURL,
-                isCoordinator: member.uuid == topologyGroup.coordinatorID
+                isCoordinator: member.uuid == topologyGroup.coordinatorID,
+                webSocketURL: nil,
+                capabilities: []
             )
         }
 
@@ -214,6 +216,8 @@ actor SonosDiscoveryClient {
 
         return SonosGroupModel(
             id: topologyGroup.id,
+            source: .local,
+            householdID: nil,
             name: coordinatorName,
             coordinatorID: topologyGroup.coordinatorID,
             coordinatorBaseURL: coordinatorBaseURL,
@@ -221,7 +225,8 @@ actor SonosDiscoveryClient {
             playbackState: playbackState,
             track: track,
             volume: volume,
-            isMuted: isMuted
+            isMuted: isMuted,
+            volumeIsFixed: false
         )
     }
 
@@ -237,14 +242,17 @@ actor SonosDiscoveryClient {
             groups.append(
                 SonosGroupModel(
                     id: device.uuid,
+                    source: .local,
+                    householdID: nil,
                     name: device.roomName,
                     coordinatorID: device.uuid,
                     coordinatorBaseURL: device.baseURL,
-                    players: [SonosPlayerModel(id: device.uuid, name: device.roomName, baseURL: device.baseURL, isCoordinator: true)],
+                    players: [SonosPlayerModel(id: device.uuid, name: device.roomName, baseURL: device.baseURL, isCoordinator: true, webSocketURL: nil, capabilities: [])],
                     playbackState: playbackState,
                     track: track,
                     volume: volume,
-                    isMuted: isMuted
+                    isMuted: isMuted,
+                    volumeIsFixed: false
                 )
             )
         }
@@ -285,6 +293,14 @@ actor SonosDiscoveryClient {
     }
 
     private func loadTrack(baseURL: URL) async -> SonosTrackModel? {
+        if let track = await loadTrackFromPositionInfo(baseURL: baseURL) {
+            return track
+        }
+
+        return await loadTrackFromMediaInfo(baseURL: baseURL)
+    }
+
+    private func loadTrackFromPositionInfo(baseURL: URL) async -> SonosTrackModel? {
         do {
             let response = try await soapClient.sendAction(
                 baseURL: baseURL,
@@ -299,7 +315,62 @@ actor SonosDiscoveryClient {
             )
 
             let metadata = SonosXML.firstValue(for: "TrackMetaData", in: response) ?? ""
-            return SonosParsing.parseTrackMetadata(xml: metadata, baseURL: baseURL)
+            if let track = SonosParsing.parseTrackMetadata(xml: metadata, baseURL: baseURL) {
+                return track
+            }
+
+            if let trackURI = SonosXML.firstValue(for: "TrackURI", in: response)?.nilIfBlank {
+                let fallbackTitle = URL(string: trackURI)?.lastPathComponent.removingPercentEncoding?.nilIfBlank
+                if let fallbackTitle {
+                    return SonosTrackModel(
+                        title: fallbackTitle,
+                        artist: nil,
+                        album: nil,
+                        albumArtURL: nil,
+                        containerName: nil,
+                        streamInfo: nil
+                    )
+                }
+            }
+
+            return nil
+        } catch {
+            return nil
+        }
+    }
+
+    private func loadTrackFromMediaInfo(baseURL: URL) async -> SonosTrackModel? {
+        do {
+            let response = try await soapClient.sendAction(
+                baseURL: baseURL,
+                path: "/MediaRenderer/AVTransport/Control",
+                serviceType: "urn:schemas-upnp-org:service:AVTransport:1",
+                action: "GetMediaInfo",
+                body: """
+                <u:GetMediaInfo xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">
+                  <InstanceID>0</InstanceID>
+                </u:GetMediaInfo>
+                """
+            )
+
+            let metadata = SonosXML.firstValue(for: "CurrentURIMetaData", in: response) ?? ""
+            if let track = SonosParsing.parseTrackMetadata(xml: metadata, baseURL: baseURL) {
+                return track
+            }
+
+            if let currentURI = SonosXML.firstValue(for: "CurrentURI", in: response)?.nilIfBlank {
+                let fallbackTitle = URL(string: currentURI)?.lastPathComponent.removingPercentEncoding?.nilIfBlank ?? currentURI
+                return SonosTrackModel(
+                    title: fallbackTitle,
+                    artist: nil,
+                    album: nil,
+                    albumArtURL: nil,
+                    containerName: nil,
+                    streamInfo: nil
+                )
+            }
+
+            return nil
         } catch {
             return nil
         }

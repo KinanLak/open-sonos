@@ -1,0 +1,3 @@
+SONOS_CLIENT_ID=8cc1f9e8-0dc0-48c7-b435-9ada641763dd
+SONOS_CLIENT_SECRET=replace-with-your-rotated-sonos-secret
+SONOS_REDIRECT_URI=https://open-sonos.kinan.fr/sonos-oauth-callback.html

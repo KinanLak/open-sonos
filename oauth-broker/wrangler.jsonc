@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "open-sonos-oauth-broker",
+  "main": "src/index.js",
+  "compatibility_date": "2026-03-27",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "SONOS_CLIENT_ID": "8cc1f9e8-0dc0-48c7-b435-9ada641763dd",
+    "SONOS_REDIRECT_URI": "https://open-sonos.kinan.fr/sonos-oauth-callback.html"
+  }
+}

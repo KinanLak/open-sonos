@@ -13,6 +13,14 @@ let project = Project(
             deploymentTargets: .macOS("14.0"),
             infoPlist: .extendingDefault(with: [
                 "CFBundleDisplayName": .string(appName),
+                "CFBundleURLTypes": .array([
+                    .dictionary([
+                        "CFBundleURLName": .string("dev.kinan.opensonos.oauth"),
+                        "CFBundleURLSchemes": .array([
+                            .string("opensonos"),
+                        ]),
+                    ]),
+                ]),
                 "LSUIElement": .boolean(true),
                 "LSMinimumSystemVersion": .string("14.0"),
                 "NSAppTransportSecurity": .dictionary([

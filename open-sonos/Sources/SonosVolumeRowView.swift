@@ -25,19 +25,22 @@ struct SonosVolumeRowView: View {
                 in: 0 ... 100,
                 step: 1
             )
+            .disabled(group.volumeIsFixed)
 
             HStack {
                 Button("-5") {
                     store.stepSelectedVolume(-5)
                 }
+                .disabled(group.volumeIsFixed)
 
                 Button("+5") {
                     store.stepSelectedVolume(5)
                 }
+                .disabled(group.volumeIsFixed)
 
                 Spacer()
 
-                Text(group.playerSummary)
+                Text(group.volumeIsFixed ? "Fixed volume" : group.playerSummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -69,3 +69,7 @@ Derived/
 
 ### Tuist managed dependencies ###
 Tuist/.build
+
+### OAuth broker ###
+oauth-broker/.dev.vars
+oauth-broker/.wrangler/
