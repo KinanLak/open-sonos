@@ -94,6 +94,40 @@ final class SonosStore {
         cloudHouseholds.first(where: { $0.id == selectedCloudHouseholdID }) ?? cloudHouseholds.first
     }
 
+    var selectedGroupManagementOptions: [SonosGroupManagementOption] {
+        guard let selectedGroup else { return [] }
+
+        var seenPlayerIDs = Set<String>()
+        let options = activeGroups.compactMap { group -> [SonosGroupManagementOption]? in
+            group.players.compactMap { player in
+                guard seenPlayerIDs.insert(player.id).inserted else { return nil }
+
+                let isInSelectedGroup = group.id == selectedGroup.id
+                let isCoordinator = selectedGroup.coordinatorID == player.id
+                let canJoinSelectedGroup = !isInSelectedGroup
+                let canLeaveSelectedGroup = isInSelectedGroup && selectedGroup.players.count > 1 && !isCoordinator
+
+                return SonosGroupManagementOption(
+                    player: player,
+                    currentGroupID: group.id,
+                    currentGroupName: group.name,
+                    isInSelectedGroup: isInSelectedGroup,
+                    isCoordinator: isCoordinator,
+                    canJoinSelectedGroup: canJoinSelectedGroup,
+                    canLeaveSelectedGroup: canLeaveSelectedGroup
+                )
+            }
+        }.flatMap { $0 }
+
+        return options.sorted {
+            if $0.isInSelectedGroup != $1.isInSelectedGroup {
+                return $0.isInSelectedGroup && !$1.isInSelectedGroup
+            }
+
+            return $0.player.name.localizedCaseInsensitiveCompare($1.player.name) == .orderedAscending
+        }
+    }
+
     var menuBarTitle: String {
         if isRefreshing, activeGroups.isEmpty {
             return activeSource == .cloud ? "Cloud" : "Scanning"
@@ -340,6 +374,14 @@ final class SonosStore {
         setSelectedVolumeFromUI(Double(max(0, min(nextValue, 100))))
     }
 
+    func groupManagementActionTapped(_ option: SonosGroupManagementOption) {
+        if option.canJoinSelectedGroup {
+            addPlayerToSelectedGroup(option.player.id)
+        } else if option.canLeaveSelectedGroup {
+            removePlayerFromSelectedGroup(option.player.id)
+        }
+    }
+
     private var initialCloudStatusMessage: String {
         if cloudSession != nil {
             return "Connected to Sonos Cloud"
@@ -566,6 +608,39 @@ final class SonosStore {
         if let firstGroup = cloudGroups.first {
             selectedCloudGroupID = firstGroup.id
             userDefaults.set(firstGroup.id, forKey: DefaultsKeys.selectedCloudGroupID)
+        }
+    }
+
+    private func addPlayerToSelectedGroup(_ playerID: String) {
+        guard let selectedGroup else { return }
+        guard let option = selectedGroupManagementOptions.first(where: { $0.player.id == playerID }), option.canJoinSelectedGroup else { return }
+
+        performAction(for: selectedGroup) {
+            switch selectedGroup.source {
+            case .local:
+                try await self.controlClient.joinPlayer(option.player, to: selectedGroup)
+            case .cloud:
+                let accessToken = try await self.validCloudAccessToken()
+                let playerIDs = Array(Set(selectedGroup.players.map(\ .id) + [playerID])).sorted()
+                try await self.cloudClient.setGroupMembers(groupID: selectedGroup.id, playerIDs: playerIDs, accessToken: accessToken)
+            }
+        }
+    }
+
+    private func removePlayerFromSelectedGroup(_ playerID: String) {
+        guard let selectedGroup else { return }
+        guard let option = selectedGroupManagementOptions.first(where: { $0.player.id == playerID }), option.canLeaveSelectedGroup else { return }
+
+        performAction(for: selectedGroup) {
+            switch selectedGroup.source {
+            case .local:
+                try await self.controlClient.ungroupPlayer(option.player)
+            case .cloud:
+                let accessToken = try await self.validCloudAccessToken()
+                let playerIDs = selectedGroup.players.map(\ .id).filter { $0 != playerID }
+                guard !playerIDs.isEmpty else { return }
+                try await self.cloudClient.setGroupMembers(groupID: selectedGroup.id, playerIDs: playerIDs, accessToken: accessToken)
+            }
         }
     }
 

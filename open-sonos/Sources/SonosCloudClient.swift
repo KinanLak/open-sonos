@@ -121,6 +121,11 @@ actor SonosCloudClient {
         _ = try await sendRequest(path: "/groups/\(groupID)/groupVolume/mute", method: "POST", accessToken: accessToken, body: body)
     }
 
+    func setGroupMembers(groupID: String, playerIDs: [String], accessToken: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["playerIds": playerIDs])
+        _ = try await sendRequest(path: "/groups/\(groupID)/groups/setGroupMembers", method: "POST", accessToken: accessToken, body: body)
+    }
+
     func brokerHealth(configuration: SonosCloudConfiguration) async throws -> String {
         guard configuration.isValid else {
             throw SonosCloudError.invalidConfiguration

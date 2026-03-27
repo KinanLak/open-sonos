@@ -144,4 +144,38 @@ actor SonosControlClient {
             )
         }
     }
+
+    func joinPlayer(_ player: SonosPlayerModel, to group: SonosGroupModel) async throws {
+        guard let baseURL = player.baseURL else { return }
+
+        _ = try await soapClient.sendAction(
+            baseURL: baseURL,
+            path: "/MediaRenderer/AVTransport/Control",
+            serviceType: "urn:schemas-upnp-org:service:AVTransport:1",
+            action: "SetAVTransportURI",
+            body: """
+            <u:SetAVTransportURI xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">
+              <InstanceID>0</InstanceID>
+              <CurrentURI>x-rincon:\(group.coordinatorID)</CurrentURI>
+              <CurrentURIMetaData></CurrentURIMetaData>
+            </u:SetAVTransportURI>
+            """
+        )
+    }
+
+    func ungroupPlayer(_ player: SonosPlayerModel) async throws {
+        guard let baseURL = player.baseURL else { return }
+
+        _ = try await soapClient.sendAction(
+            baseURL: baseURL,
+            path: "/MediaRenderer/AVTransport/Control",
+            serviceType: "urn:schemas-upnp-org:service:AVTransport:1",
+            action: "BecomeCoordinatorOfStandaloneGroup",
+            body: """
+            <u:BecomeCoordinatorOfStandaloneGroup xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">
+              <InstanceID>0</InstanceID>
+            </u:BecomeCoordinatorOfStandaloneGroup>
+            """
+        )
+    }
 }

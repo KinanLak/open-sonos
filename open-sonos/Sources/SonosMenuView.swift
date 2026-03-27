@@ -18,6 +18,7 @@ struct SonosMenuView: View {
                 if let selectedGroup = store.selectedGroup {
                     SonosPlaybackRowView(store: store, group: selectedGroup)
                     SonosVolumeRowView(store: store, group: selectedGroup)
+                    SonosGroupManagementView(store: store, group: selectedGroup)
                 }
 
                 groupSection

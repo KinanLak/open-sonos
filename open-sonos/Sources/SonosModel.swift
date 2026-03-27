@@ -158,6 +158,45 @@ struct SonosGroupModel: Identifiable, Hashable {
     var menuBarLabel: String {
         String(name.prefix(12)).nilIfBlank ?? "Sonos"
     }
+
+    func contains(playerID: String) -> Bool {
+        players.contains(where: { $0.id == playerID })
+    }
+}
+
+struct SonosGroupManagementOption: Identifiable, Hashable {
+    var id: String { player.id }
+    var player: SonosPlayerModel
+    var currentGroupID: String
+    var currentGroupName: String
+    var isInSelectedGroup: Bool
+    var isCoordinator: Bool
+    var canJoinSelectedGroup: Bool
+    var canLeaveSelectedGroup: Bool
+
+    var statusLabel: String {
+        if isCoordinator {
+            return "Coordinator"
+        }
+
+        if isInSelectedGroup {
+            return "In this group"
+        }
+
+        return currentGroupName
+    }
+
+    var actionLabel: String? {
+        if canJoinSelectedGroup {
+            return "Add"
+        }
+
+        if canLeaveSelectedGroup {
+            return "Ungroup"
+        }
+
+        return nil
+    }
 }
 
 extension String {
