@@ -78,11 +78,10 @@ enum SonosParsing {
     }
 
     static func parseTrackMetadata(xml: String, baseURL: URL) -> SonosTrackModel? {
-        let payload = SonosXML.decodeEntities(xml)
-        guard payload.nilIfBlank != nil else { return nil }
+        guard xml.nilIfBlank != nil else { return nil }
 
         let parserDelegate = TrackMetadataParser(baseURL: baseURL)
-        let parser = XMLParser(data: Data(payload.utf8))
+        let parser = XMLParser(data: Data(xml.utf8))
         parser.delegate = parserDelegate
         parser.parse()
         return parserDelegate.track

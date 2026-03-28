@@ -300,11 +300,22 @@ actor SonosDiscoveryClient {
     }
 
     private func loadTrack(baseURL: URL) async -> SonosTrackModel? {
-        if let track = await loadTrackFromPositionInfo(baseURL: baseURL) {
-            return track
+        var track = await loadTrackFromPositionInfo(baseURL: baseURL)
+        if track == nil {
+            track = await loadTrackFromMediaInfo(baseURL: baseURL)
         }
 
-        return await loadTrackFromMediaInfo(baseURL: baseURL)
+        guard var track else { return nil }
+
+        if track.albumArtURL == nil {
+            track.albumArtURL = await ArtworkFallbackClient.shared.artworkURL(
+                artist: track.artist,
+                album: track.album,
+                title: track.title
+            )
+        }
+
+        return track
     }
 
     private func loadTrackFromPositionInfo(baseURL: URL) async -> SonosTrackModel? {

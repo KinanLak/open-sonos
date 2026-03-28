@@ -1,8 +1,11 @@
+import ServiceManagement
 import SwiftUI
 
 struct SonosSettingsView: View {
     let store: SonosStore
     let hotkeyManager: HotkeyManager
+
+    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     var body: some View {
         TabView {
@@ -22,6 +25,21 @@ struct SonosSettingsView: View {
 
     private var generalTab: some View {
         Form {
+            Section("Application") {
+                Toggle("Launch at Login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, newValue in
+                        do {
+                            if newValue {
+                                try SMAppService.mainApp.register()
+                            } else {
+                                try SMAppService.mainApp.unregister()
+                            }
+                        } catch {
+                            launchAtLogin = SMAppService.mainApp.status == .enabled
+                        }
+                    }
+            }
+
             connectionSection
             groupPickerSection
 
