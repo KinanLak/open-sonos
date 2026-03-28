@@ -374,6 +374,27 @@ final class SonosStore {
         setSelectedVolumeFromUI(Double(max(0, min(nextValue, 100))))
     }
 
+    func setSelectedPlayerVolumeFromUI(_ value: Double, playerID: String) {
+        guard let group = selectedGroup,
+              let player = group.players.first(where: { $0.id == playerID }),
+              !player.volumeIsFixed else { return }
+
+        let roundedValue = Int(value.rounded())
+        performAction(for: group, optimisticUpdate: { currentGroup in
+            guard let playerIndex = currentGroup.players.firstIndex(where: { $0.id == playerID }) else { return }
+            currentGroup.players[playerIndex].volume = roundedValue
+            currentGroup.volume = currentGroup.averagePlayerVolume
+        }) {
+            switch group.source {
+            case .local:
+                try await self.controlClient.setPlayerVolume(roundedValue, for: player)
+            case .cloud:
+                let accessToken = try await self.validCloudAccessToken()
+                try await self.cloudClient.setPlayerVolume(playerID: playerID, volume: roundedValue, accessToken: accessToken)
+            }
+        }
+    }
+
     func groupManagementActionTapped(_ option: SonosGroupManagementOption) {
         if option.canJoinSelectedGroup {
             addPlayerToSelectedGroup(option.player.id)
@@ -513,20 +534,31 @@ final class SonosStore {
             let metadata = try? await cloudClient.getMetadata(groupID: cloudGroup.id, accessToken: accessToken)
             let volume = try? await cloudClient.getGroupVolume(groupID: cloudGroup.id, accessToken: accessToken)
 
-            let players = (cloudGroup.playerIds ?? []).compactMap { playerID -> SonosPlayerModel? in
-                guard let cloudPlayer = playersByID[playerID] else { return nil }
-                return SonosPlayerModel(
-                    id: cloudPlayer.id,
-                    name: cloudPlayer.name?.nilIfBlank ?? cloudPlayer.id,
-                    baseURL: nil,
-                    isCoordinator: cloudPlayer.id == cloudGroup.coordinatorId,
-                    webSocketURL: URL(string: cloudPlayer.webSocketUrl ?? ""),
-                    capabilities: cloudPlayer.capabilities ?? []
+            var players: [SonosPlayerModel] = []
+
+            for playerID in cloudGroup.playerIds ?? [] {
+                guard let cloudPlayer = playersByID[playerID] else { continue }
+                let playerVolume = try? await cloudClient.getPlayerVolume(playerID: cloudPlayer.id, accessToken: accessToken)
+
+                players.append(
+                    SonosPlayerModel(
+                        id: cloudPlayer.id,
+                        name: cloudPlayer.name?.nilIfBlank ?? cloudPlayer.id,
+                        baseURL: nil,
+                        isCoordinator: cloudPlayer.id == cloudGroup.coordinatorId,
+                        webSocketURL: URL(string: cloudPlayer.webSocketUrl ?? ""),
+                        capabilities: cloudPlayer.capabilities ?? [],
+                        volume: playerVolume?.volume ?? 0,
+                        isMuted: playerVolume?.muted ?? false,
+                        volumeIsFixed: playerVolume?.fixed ?? false
+                    )
                 )
             }
 
             let playbackState = SonosPlaybackState(transportState: playback?.playbackState ?? cloudGroup.playbackState ?? "")
             let groupName = cloudGroup.name?.nilIfBlank ?? players.first(where: { $0.isCoordinator })?.name ?? players.first?.name ?? "Sonos Group"
+            let fallbackGroupMute = !players.isEmpty && players.allSatisfy(\.isMuted)
+            let fallbackGroupVolume = players.isEmpty ? 0 : Int((Double(players.reduce(0) { $0 + $1.volume }) / Double(players.count)).rounded())
 
             groups.append(
                 SonosGroupModel(
@@ -539,8 +571,8 @@ final class SonosStore {
                     players: players,
                     playbackState: playbackState,
                     track: metadata?.trackModel,
-                    volume: volume?.volume ?? 0,
-                    isMuted: volume?.muted ?? false,
+                    volume: volume?.volume ?? fallbackGroupVolume,
+                    isMuted: volume?.muted ?? fallbackGroupMute,
                     volumeIsFixed: volume?.fixed ?? false
                 )
             )
@@ -621,7 +653,7 @@ final class SonosStore {
                 try await self.controlClient.joinPlayer(option.player, to: selectedGroup)
             case .cloud:
                 let accessToken = try await self.validCloudAccessToken()
-                let playerIDs = Array(Set(selectedGroup.players.map(\ .id) + [playerID])).sorted()
+                let playerIDs = Array(Set(selectedGroup.players.map(\.id) + [playerID])).sorted()
                 try await self.cloudClient.setGroupMembers(groupID: selectedGroup.id, playerIDs: playerIDs, accessToken: accessToken)
             }
         }
@@ -637,7 +669,7 @@ final class SonosStore {
                 try await self.controlClient.ungroupPlayer(option.player)
             case .cloud:
                 let accessToken = try await self.validCloudAccessToken()
-                let playerIDs = selectedGroup.players.map(\ .id).filter { $0 != playerID }
+                let playerIDs = selectedGroup.players.map(\.id).filter { $0 != playerID }
                 guard !playerIDs.isEmpty else { return }
                 try await self.cloudClient.setGroupMembers(groupID: selectedGroup.id, playerIDs: playerIDs, accessToken: accessToken)
             }

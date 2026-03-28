@@ -95,6 +95,11 @@ actor SonosCloudClient {
         return try jsonDecoder.decode(SonosCloudGroupVolumeResource.self, from: data)
     }
 
+    func getPlayerVolume(playerID: String, accessToken: String) async throws -> SonosCloudPlayerVolumeResource {
+        let data = try await sendRequest(path: "/players/\(playerID)/playerVolume", method: "GET", accessToken: accessToken)
+        return try jsonDecoder.decode(SonosCloudPlayerVolumeResource.self, from: data)
+    }
+
     func play(groupID: String, accessToken: String) async throws {
         _ = try await sendRequest(path: "/groups/\(groupID)/playback/play", method: "POST", accessToken: accessToken)
     }
@@ -119,6 +124,11 @@ actor SonosCloudClient {
     func setGroupMuted(groupID: String, muted: Bool, accessToken: String) async throws {
         let body = try JSONSerialization.data(withJSONObject: ["muted": muted])
         _ = try await sendRequest(path: "/groups/\(groupID)/groupVolume/mute", method: "POST", accessToken: accessToken, body: body)
+    }
+
+    func setPlayerVolume(playerID: String, volume: Int, accessToken: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["volume": max(0, min(volume, 100))])
+        _ = try await sendRequest(path: "/players/\(playerID)/playerVolume", method: "POST", accessToken: accessToken, body: body)
     }
 
     func setGroupMembers(groupID: String, playerIDs: [String], accessToken: String) async throws {

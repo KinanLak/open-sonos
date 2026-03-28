@@ -94,6 +94,9 @@ struct SonosPlayerModel: Identifiable, Hashable {
     var isCoordinator: Bool
     var webSocketURL: URL?
     var capabilities: [String]
+    var volume: Int
+    var isMuted: Bool
+    var volumeIsFixed: Bool
 }
 
 struct SonosDeviceModel: Hashable {
@@ -161,6 +164,12 @@ struct SonosGroupModel: Identifiable, Hashable {
 
     func contains(playerID: String) -> Bool {
         players.contains(where: { $0.id == playerID })
+    }
+
+    var averagePlayerVolume: Int {
+        guard !players.isEmpty else { return volume }
+        let total = players.reduce(0) { $0 + $1.volume }
+        return Int((Double(total) / Double(players.count)).rounded())
     }
 }
 

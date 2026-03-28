@@ -56,6 +56,12 @@ struct SonosCloudGroupVolumeResource: Decodable {
     var volume: Int?
 }
 
+struct SonosCloudPlayerVolumeResource: Decodable {
+    var muted: Bool?
+    var fixed: Bool?
+    var volume: Int?
+}
+
 struct SonosCloudMetadataStatusResource: Decodable {
     var container: SonosCloudContainerResource?
     var currentItem: SonosCloudItemResource?

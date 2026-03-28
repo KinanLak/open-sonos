@@ -145,6 +145,25 @@ actor SonosControlClient {
         }
     }
 
+    func setPlayerVolume(_ volume: Int, for player: SonosPlayerModel) async throws {
+        guard let baseURL = player.baseURL else { return }
+        let clampedVolume = max(0, min(volume, 100))
+
+        _ = try await soapClient.sendAction(
+            baseURL: baseURL,
+            path: "/MediaRenderer/RenderingControl/Control",
+            serviceType: "urn:schemas-upnp-org:service:RenderingControl:1",
+            action: "SetVolume",
+            body: """
+            <u:SetVolume xmlns:u=\"urn:schemas-upnp-org:service:RenderingControl:1\">
+              <InstanceID>0</InstanceID>
+              <Channel>Master</Channel>
+              <DesiredVolume>\(clampedVolume)</DesiredVolume>
+            </u:SetVolume>
+            """
+        )
+    }
+
     func joinPlayer(_ player: SonosPlayerModel, to group: SonosGroupModel) async throws {
         guard let baseURL = player.baseURL else { return }
 

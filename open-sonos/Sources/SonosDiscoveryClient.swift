@@ -188,20 +188,27 @@ actor SonosDiscoveryClient {
             return nil
         }
 
-        let players = topologyGroup.members.compactMap { member -> SonosPlayerModel? in
+        var players: [SonosPlayerModel] = []
+
+        for member in topologyGroup.members {
             guard let baseURL = member.baseURL ?? devicesByID[member.uuid]?.baseURL ?? Optional(coordinatorBaseURL) else {
-                return nil
+                continue
             }
 
             let resolvedName = member.name.nilIfBlank ?? devicesByID[member.uuid]?.roomName ?? devicesByID[member.uuid]?.friendlyName ?? "Sonos"
-            return SonosPlayerModel(
+            let volume = await loadIndividualVolume(baseURL: baseURL)
+            let isMuted = await loadIndividualMuted(baseURL: baseURL)
+            players.append(SonosPlayerModel(
                 id: member.uuid,
                 name: resolvedName,
                 baseURL: baseURL,
                 isCoordinator: member.uuid == topologyGroup.coordinatorID,
                 webSocketURL: nil,
-                capabilities: []
-            )
+                capabilities: [],
+                volume: volume,
+                isMuted: isMuted,
+                volumeIsFixed: false
+            ))
         }
 
         guard !players.isEmpty else {
@@ -247,7 +254,7 @@ actor SonosDiscoveryClient {
                     name: device.roomName,
                     coordinatorID: device.uuid,
                     coordinatorBaseURL: device.baseURL,
-                    players: [SonosPlayerModel(id: device.uuid, name: device.roomName, baseURL: device.baseURL, isCoordinator: true, webSocketURL: nil, capabilities: [])],
+                    players: [SonosPlayerModel(id: device.uuid, name: device.roomName, baseURL: device.baseURL, isCoordinator: true, webSocketURL: nil, capabilities: [], volume: volume, isMuted: isMuted, volumeIsFixed: false)],
                     playbackState: playbackState,
                     track: track,
                     volume: volume,
