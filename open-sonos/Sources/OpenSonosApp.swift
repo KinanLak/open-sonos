@@ -20,5 +20,10 @@ struct OpenSonosApp: App {
             Label(store.menuBarTitle, systemImage: store.menuBarSymbol)
         }
         .menuBarExtraStyle(.window)
+
+        Window("OpenSonos Settings", id: "settings") {
+            SonosSettingsView(store: store)
+        }
+        .windowResizability(.contentSize)
     }
 }

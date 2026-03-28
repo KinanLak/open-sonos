@@ -35,6 +35,8 @@ final class SonosStore {
     @ObservationIgnored private let userDefaults: UserDefaults
     @ObservationIgnored private let keychain: SonosKeychainStore
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var volumeTask: Task<Void, Never>?
+    @ObservationIgnored private var playerVolumeTask: Task<Void, Never>?
     @ObservationIgnored private var hasStarted = false
     @ObservationIgnored private var pendingOAuthState: String?
     @ObservationIgnored private var cloudSession: SonosCloudSession?
@@ -356,15 +358,23 @@ final class SonosStore {
     func setSelectedVolumeFromUI(_ value: Double) {
         guard let group = selectedGroup, !group.volumeIsFixed else { return }
         let roundedValue = Int(value.rounded())
-        performAction(for: group, optimisticUpdate: { currentGroup in
-            currentGroup.volume = roundedValue
-        }) {
-            switch group.source {
-            case .local:
-                try await self.controlClient.setGroupVolume(roundedValue, for: group)
-            case .cloud:
-                let accessToken = try await self.validCloudAccessToken()
-                try await self.cloudClient.setGroupVolume(groupID: group.id, volume: roundedValue, accessToken: accessToken)
+        updateGroup(group) { $0.volume = roundedValue }
+
+        volumeTask?.cancel()
+        volumeTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+            do {
+                switch group.source {
+                case .local:
+                    try await self.controlClient.setGroupVolume(roundedValue, for: group)
+                case .cloud:
+                    let accessToken = try await self.validCloudAccessToken()
+                    try await self.cloudClient.setGroupVolume(groupID: group.id, volume: roundedValue, accessToken: accessToken)
+                }
+            } catch {
+                await MainActor.run { self.errorMessage = error.localizedDescription }
             }
         }
     }
@@ -380,17 +390,27 @@ final class SonosStore {
               !player.volumeIsFixed else { return }
 
         let roundedValue = Int(value.rounded())
-        performAction(for: group, optimisticUpdate: { currentGroup in
+        updateGroup(group) { currentGroup in
             guard let playerIndex = currentGroup.players.firstIndex(where: { $0.id == playerID }) else { return }
             currentGroup.players[playerIndex].volume = roundedValue
             currentGroup.volume = currentGroup.averagePlayerVolume
-        }) {
-            switch group.source {
-            case .local:
-                try await self.controlClient.setPlayerVolume(roundedValue, for: player)
-            case .cloud:
-                let accessToken = try await self.validCloudAccessToken()
-                try await self.cloudClient.setPlayerVolume(playerID: playerID, volume: roundedValue, accessToken: accessToken)
+        }
+
+        playerVolumeTask?.cancel()
+        playerVolumeTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+            do {
+                switch group.source {
+                case .local:
+                    try await self.controlClient.setPlayerVolume(roundedValue, for: player)
+                case .cloud:
+                    let accessToken = try await self.validCloudAccessToken()
+                    try await self.cloudClient.setPlayerVolume(playerID: playerID, volume: roundedValue, accessToken: accessToken)
+                }
+            } catch {
+                await MainActor.run { self.errorMessage = error.localizedDescription }
             }
         }
     }
@@ -463,7 +483,7 @@ final class SonosStore {
     private func refreshLocalState() async -> Error? {
         do {
             let discoveredGroups = try await discoveryClient.discoverGroups()
-            localGroups = discoveredGroups
+            localGroups = discoveredGroups.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             reconcileLocalSelection()
             return nil
         } catch {

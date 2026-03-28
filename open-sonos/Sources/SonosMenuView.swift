@@ -2,238 +2,334 @@ import SwiftUI
 
 struct SonosMenuView: View {
     let store: SonosStore
-    @State private var showsCloudSetup = false
+    @Environment(\.openWindow) private var openWindow
+    @State private var showsGroupEdit = false
+    @State private var showsSpeakers = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                header
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                if let group = store.selectedGroup {
+                    SonosPlaybackRowView(store: store, group: group)
+                        .padding(12)
 
-                sourcePickerSection
+                    Divider()
 
-                if store.activeSource == .cloud, !store.cloudHouseholds.isEmpty {
-                    householdSection
-                }
-
-                if let selectedGroup = store.selectedGroup {
-                    SonosPlaybackRowView(store: store, group: selectedGroup)
-                    SonosVolumeRowView(store: store, group: selectedGroup)
-                    SonosGroupManagementView(store: store, group: selectedGroup)
-                }
-
-                groupSection
-                cloudSection
-
-                if let errorMessage = store.errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    SonosVolumeRowView(store: store, group: group)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                } else {
+                    emptyState
                 }
 
                 Divider()
 
-                HStack {
-                    Button("Refresh") {
-                        store.refreshButtonTapped()
-                    }
-                    .keyboardShortcut("r", modifiers: [.command])
-
-                    Spacer()
-
-                    Button("Quit") {
-                        NSApplication.shared.terminate(nil)
-                    }
-                    .keyboardShortcut("q", modifiers: [.command])
+                if !store.activeGroups.isEmpty {
+                    groupList
                 }
-            }
-            .padding(14)
-        }
-        .frame(width: 430, height: 620)
-    }
 
-    private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("OpenSonos")
-                    .font(.headline)
+                if let group = store.selectedGroup, group.players.count > 1 {
+                    speakerVolumeSection(group)
+                }
 
-                Text(store.statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if store.selectedGroup != nil, store.selectedGroupManagementOptions.count > 1 {
+                    groupEditSection
+                }
 
-                Text(store.activeSource == .cloud ? store.cloudStatusMessage : "Direct local network control")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-
-                if let updatedAt = store.lastUpdatedAt {
-                    Text(updatedAt.formatted(date: .omitted, time: .shortened))
+                if let error = store.errorMessage {
+                    Text(error)
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                }
+
+                Divider()
+                footer
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .frame(width: 300)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(PanelConfigurator())
+    }
+
+    // MARK: - Empty state
+
+    private var emptyState: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "speaker.slash")
+                .font(.title2)
+                .foregroundStyle(.tertiary)
+
+            Text(store.isRefreshing ? "Scanning..." : "No speakers found")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 20)
+    }
+
+    // MARK: - Group list
+
+    private var groupList: some View {
+        VStack(spacing: 1) {
+            ForEach(store.activeGroups.sorted(by: \.name)) { group in
+                SonosGroupRowView(
+                    group: group,
+                    isSelected: group.id == store.selectedGroup?.id,
+                    onSelect: { store.selectGroup(group) }
+                )
+            }
+        }
+        .padding(6)
+    }
+
+    // MARK: - Speaker volumes (custom disclosure)
+
+    private func speakerVolumeSection(_ group: SonosGroupModel) -> some View {
+        let currentGroup = store.selectedGroup ?? group
+        let sortedPlayers = currentGroup.players.sorted(by: \.name)
+
+        return VStack(spacing: 0) {
+            disclosureHeader(
+                label: "\(currentGroup.players.count) speakers",
+                isExpanded: showsSpeakers
+            ) {
+                updateDisclosureState {
+                    showsSpeakers.toggle()
                 }
             }
 
-            Spacer()
+            if showsSpeakers {
+                VStack(spacing: 6) {
+                    ForEach(sortedPlayers) { player in
+                        HStack(spacing: 6) {
+                            Text(player.name)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 70, alignment: .leading)
+                                .lineLimit(1)
 
-            if store.isRefreshing || store.isPerformingAction || store.isCloudAuthenticating {
-                ProgressView()
-                    .controlSize(.small)
-            }
-        }
-    }
+                            SonosSlider(
+                                value: Binding(
+                                    get: { Double(resolvedVolume(for: player, in: currentGroup)) },
+                                    set: { store.setSelectedPlayerVolumeFromUI($0, playerID: player.id) }
+                                ),
+                                disabled: resolvedIsFixed(for: player, in: currentGroup),
+                                height: 4
+                            )
 
-    private var sourcePickerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if store.availableSources.count > 1 {
-                Text("Connection")
-                    .font(.subheadline.weight(.semibold))
-
-                Picker("Connection", selection: Binding(
-                    get: { store.preferredSource },
-                    set: { store.setPreferredSource($0) }
-                )) {
-                    ForEach(store.availableSources) { source in
-                        Text(source.label).tag(source)
+                            Text("\(resolvedVolume(for: player, in: currentGroup))")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                                .frame(width: 20, alignment: .trailing)
+                        }
                     }
                 }
-                .pickerStyle(.segmented)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
         }
     }
 
-    private var householdSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
+    // MARK: - Group edit (custom disclosure)
 
-            Text("Households")
-                .font(.subheadline.weight(.semibold))
+    private var groupEditSection: some View {
+        VStack(spacing: 0) {
+            disclosureHeader(
+                label: "Edit group",
+                isExpanded: showsGroupEdit
+            ) {
+                updateDisclosureState {
+                    showsGroupEdit.toggle()
+                }
+            }
 
-            if store.cloudHouseholds.count > 1 {
-                VStack(spacing: 8) {
-                    ForEach(store.cloudHouseholds) { household in
+            if showsGroupEdit {
+                VStack(spacing: 1) {
+                    ForEach(store.selectedGroupManagementOptions) { option in
                         Button {
-                            store.selectHousehold(household)
+                            store.groupManagementActionTapped(option)
                         } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: household.id == store.selectedHousehold?.id ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(household.id == store.selectedHousehold?.id ? Color.accentColor : Color.secondary)
+                            HStack(spacing: 6) {
+                                Image(systemName: option.isInSelectedGroup ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(option.isInSelectedGroup ? Color.accentColor : Color.secondary.opacity(0.4))
+                                    .font(.caption)
 
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(household.name)
-                                        .foregroundStyle(.primary)
-                                    Text(household.detailLabel)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
+                                Text(option.player.name)
+                                    .font(.caption)
+                                    .foregroundStyle(.primary)
+
+                                if option.isCoordinator {
+                                    Image(systemName: "star.fill")
+                                        .font(.system(size: 7))
+                                        .foregroundStyle(Color.secondary)
                                 }
 
                                 Spacer()
                             }
-                            .padding(10)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(household.id == store.selectedHousehold?.id ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.08))
-                            )
+                            .padding(.vertical, 3)
+                            .padding(.horizontal, 4)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .disabled(option.actionLabel == nil)
                     }
                 }
-            } else if let household = store.selectedHousehold {
-                Text("Using \(household.name)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 6)
             }
         }
     }
 
-    private var groupSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
+    // MARK: - Shared disclosure header
 
-            Text(store.activeSource == .cloud ? "Groups" : "Rooms")
-                .font(.subheadline.weight(.semibold))
+    private func disclosureHeader(label: String, isExpanded: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
 
-            if store.activeGroups.isEmpty {
-                Text(store.activeSource == .cloud ? "No Sonos cloud groups are available yet for the selected household." : "No Sonos speakers found yet. Make sure your Mac is on the same Wi-Fi network.")
+                Text(label)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                VStack(spacing: 8) {
-                    ForEach(store.activeGroups) { group in
-                        SonosGroupRowView(
-                            group: group,
-                            isSelected: group.id == store.selectedGroup?.id,
-                            onSelect: { store.selectGroup(group) }
-                        )
-                    }
-                }
+
+                Spacer()
             }
+            .contentShape(Rectangle())
+            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
         }
+        .buttonStyle(.plain)
     }
 
-    private var cloudSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
+    // MARK: - Footer
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Button {
+                openWindow(id: "settings")
+                NSApp.activate()
+            } label: {
+                Image(systemName: "gearshape")
+            }
+            .help("Settings")
+
+            if store.availableSources.count > 1 {
+                Button {
+                    let next: SonosConnectionSource = store.preferredSource == .local ? .cloud : .local
+                    store.setPreferredSource(next)
+                } label: {
+                    Image(systemName: store.activeSource == .cloud ? "cloud.fill" : "antenna.radiowaves.left.and.right")
+                }
+                .help(store.activeSource == .cloud ? "Switch to Local" : "Switch to Cloud")
+            }
+
+            Spacer()
+
+            if store.isRefreshing || store.isPerformingAction {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.9)
+                    .frame(width: 14, height: 14)
+            }
 
             Button {
-                showsCloudSetup.toggle()
+                store.refreshButtonTapped()
             } label: {
-                HStack {
-                    Text("Sonos Cloud")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-
-                    Spacer()
-
-                    Text(store.isCloudConnected ? "Connected" : (store.isCloudConfigured ? "Configured" : "Setup"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Image(systemName: showsCloudSetup ? "chevron.up" : "chevron.down")
-                        .foregroundStyle(.secondary)
-                }
+                Image(systemName: "arrow.clockwise")
             }
-            .buttonStyle(.plain)
+            .keyboardShortcut("r", modifiers: [.command])
+            .help("Refresh")
 
-            if showsCloudSetup {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(store.cloudSetupHint)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            Divider()
+                .frame(height: 12)
 
-                    TextField("https://open-sonos-oauth-broker.kinan-lakh.workers.dev", text: Binding(
-                        get: { store.cloudBrokerURLDraft },
-                        set: { store.cloudBrokerURLDraft = $0 }
-                    ))
-                    .textFieldStyle(.roundedBorder)
-
-                    Text("The broker keeps the Sonos client secret server-side and uses your public callback page for OAuth.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    HStack {
-                        Button("Save") {
-                            store.saveCloudConfiguration()
-                        }
-
-                        Button(store.isCloudConnected ? "Reconnect" : "Connect") {
-                            store.beginCloudAuthentication()
-                        }
-
-                        if store.isCloudConnected {
-                            Button("Disconnect") {
-                                store.disconnectCloud()
-                            }
-                        }
-
-                        Spacer()
-                    }
-                    .buttonStyle(.bordered)
-                }
+            Button("Quit") {
+                NSApplication.shared.terminate(nil)
             }
+            .keyboardShortcut("q", modifiers: [.command])
         }
+        .buttonStyle(.plain)
+        .font(.caption)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    // MARK: - Helpers
+
+    private func resolvedVolume(for player: SonosPlayerModel, in group: SonosGroupModel) -> Int {
+        group.players.first(where: { $0.id == player.id })?.volume ?? player.volume
+    }
+
+    private func resolvedIsFixed(for player: SonosPlayerModel, in group: SonosGroupModel) -> Bool {
+        group.players.first(where: { $0.id == player.id })?.volumeIsFixed ?? player.volumeIsFixed
+    }
+
+    private func updateDisclosureState(_ action: () -> Void) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction, action)
+    }
+}
+
+// MARK: - Panel configurator (prevents auto-hide)
+
+private struct PanelConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> PanelConfigView {
+        PanelConfigView()
+    }
+
+    func updateNSView(_: PanelConfigView, context: Context) {}
+
+    class PanelConfigView: NSView {
+        private var lastSyncedBounds: CGSize = .zero
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let panel = window as? NSPanel else { return }
+            panel.hidesOnDeactivate = false
+            panel.animationBehavior = .none
+            syncPanelHeightIfNeeded()
+        }
+
+        override func layout() {
+            super.layout()
+            syncPanelHeightIfNeeded()
+        }
+
+        private func syncPanelHeightIfNeeded() {
+            guard let currentPanel = self.window as? NSPanel, bounds.height > 0 else { return }
+
+            let desiredBounds = bounds.size
+            guard abs(desiredBounds.height - lastSyncedBounds.height) > 0.5 else { return }
+
+            let currentContentHeight = currentPanel.contentView?.bounds.height ?? 0
+            let delta = desiredBounds.height - currentContentHeight
+            lastSyncedBounds = desiredBounds
+
+            guard abs(delta) > 0.5 else { return }
+
+            var frame = currentPanel.frame
+            frame.size.height += delta
+            frame.origin.y = currentPanel.frame.maxY - frame.size.height
+            currentPanel.setFrame(frame, display: false)
+
+            #if DEBUG
+            print("[PanelConfigurator] content=\(desiredBounds.height) panel=\(frame.height) delta=\(delta)")
+            #endif
+        }
+    }
+}
+
+// MARK: - Sorting helper
+
+extension Sequence {
+    func sorted(by keyPath: KeyPath<Element, String>) -> [Element] {
+        sorted { $0[keyPath: keyPath].localizedCaseInsensitiveCompare($1[keyPath: keyPath]) == .orderedAscending }
     }
 }

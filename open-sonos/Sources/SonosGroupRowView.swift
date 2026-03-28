@@ -7,41 +7,44 @@ struct SonosGroupRowView: View {
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.4))
+                    .font(.subheadline)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(group.name)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.primary)
+                Text(group.name)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
 
-                    Text(group.track?.title ?? group.playerSummary)
-                        .font(.caption)
+                if group.players.count > 1 {
+                    Text("+\(group.players.count - 1)")
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(group.source.label)
+                if group.isPlaying, let title = group.track?.title {
+                    Text(title)
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
-
-                    Text("\(group.volume)%")
-                        .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: 80, alignment: .trailing)
+                }
 
-                    Image(systemName: group.isPlaying ? "waveform" : "speaker.2")
-                        .foregroundStyle(group.isPlaying ? Color.accentColor : Color.secondary)
+                if group.isPlaying {
+                    Image(systemName: "waveform")
+                        .font(.caption2)
+                        .foregroundStyle(Color.accentColor)
                 }
             }
-            .padding(10)
+            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.08))
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
             )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
