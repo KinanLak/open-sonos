@@ -126,6 +126,10 @@ final class SonosStore {
                 return $0.isInSelectedGroup && !$1.isInSelectedGroup
             }
 
+            if $0.isInSelectedGroup && $1.isInSelectedGroup && $0.isCoordinator != $1.isCoordinator {
+                return $0.isCoordinator
+            }
+
             return $0.player.name.localizedCaseInsensitiveCompare($1.player.name) == .orderedAscending
         }
     }
@@ -139,11 +143,7 @@ final class SonosStore {
     }
 
     var menuBarSymbol: String {
-        if activeSource == .cloud {
-            return selectedGroup?.isPlaying == true ? "cloud.fill" : "cloud"
-        }
-
-        return selectedGroup?.isPlaying == true ? "speaker.wave.2.fill" : "speaker.wave.2"
+        "waveform"
     }
 
     var isCloudConfigured: Bool {
@@ -296,8 +296,8 @@ final class SonosStore {
 
     func togglePlaybackButtonTapped() {
         guard let group = selectedGroup else { return }
-        performAction(for: group, optimisticUpdate: { currentGroup in
-            currentGroup.playbackState = currentGroup.playbackState == .playing ? .paused : .playing
+        performAction(optimisticUpdate: {
+            self.updateGroup(group) { $0.playbackState = $0.playbackState == .playing ? .paused : .playing }
         }) {
             switch group.source {
             case .local:
@@ -315,7 +315,7 @@ final class SonosStore {
 
     func nextTrackButtonTapped() {
         guard let group = selectedGroup else { return }
-        performAction(for: group) {
+        performAction {
             switch group.source {
             case .local:
                 try await self.controlClient.nextTrack(group)
@@ -328,7 +328,7 @@ final class SonosStore {
 
     func previousTrackButtonTapped() {
         guard let group = selectedGroup else { return }
-        performAction(for: group) {
+        performAction {
             switch group.source {
             case .local:
                 try await self.controlClient.previousTrack(group)
@@ -342,8 +342,8 @@ final class SonosStore {
     func toggleMuteButtonTapped() {
         guard let group = selectedGroup else { return }
         let targetMute = !group.isMuted
-        performAction(for: group, optimisticUpdate: { currentGroup in
-            currentGroup.isMuted = targetMute
+        performAction(optimisticUpdate: {
+            self.updateGroup(group) { $0.isMuted = targetMute }
         }) {
             switch group.source {
             case .local:
@@ -667,7 +667,22 @@ final class SonosStore {
         guard let selectedGroup else { return }
         guard let option = selectedGroupManagementOptions.first(where: { $0.player.id == playerID }), option.canJoinSelectedGroup else { return }
 
-        performAction(for: selectedGroup) {
+        performAction(optimisticUpdate: {
+            self.modifyActiveGroups { groups in
+                if let sourceIdx = groups.firstIndex(where: { $0.id == option.currentGroupID }) {
+                    groups[sourceIdx].players.removeAll { $0.id == playerID }
+                    if groups[sourceIdx].players.isEmpty {
+                        groups.remove(at: sourceIdx)
+                    } else {
+                        groups[sourceIdx].volume = groups[sourceIdx].averagePlayerVolume
+                    }
+                }
+                if let targetIdx = groups.firstIndex(where: { $0.id == selectedGroup.id }) {
+                    groups[targetIdx].players.append(option.player)
+                    groups[targetIdx].volume = groups[targetIdx].averagePlayerVolume
+                }
+            }
+        }) {
             switch selectedGroup.source {
             case .local:
                 try await self.controlClient.joinPlayer(option.player, to: selectedGroup)
@@ -683,7 +698,30 @@ final class SonosStore {
         guard let selectedGroup else { return }
         guard let option = selectedGroupManagementOptions.first(where: { $0.player.id == playerID }), option.canLeaveSelectedGroup else { return }
 
-        performAction(for: selectedGroup) {
+        performAction(optimisticUpdate: {
+            self.modifyActiveGroups { groups in
+                let source = groups.first?.source ?? .local
+                let householdID = groups.first(where: { $0.id == selectedGroup.id })?.householdID
+                if let sourceIdx = groups.firstIndex(where: { $0.id == selectedGroup.id }) {
+                    groups[sourceIdx].players.removeAll { $0.id == playerID }
+                    groups[sourceIdx].volume = groups[sourceIdx].averagePlayerVolume
+                }
+                groups.append(SonosGroupModel(
+                    id: playerID,
+                    source: source,
+                    householdID: householdID,
+                    name: option.player.name,
+                    coordinatorID: playerID,
+                    coordinatorBaseURL: option.player.baseURL,
+                    players: [option.player],
+                    playbackState: .paused,
+                    track: nil,
+                    volume: option.player.volume,
+                    isMuted: option.player.isMuted,
+                    volumeIsFixed: option.player.volumeIsFixed
+                ))
+            }
+        }) {
             switch selectedGroup.source {
             case .local:
                 try await self.controlClient.ungroupPlayer(option.player)
@@ -697,15 +735,12 @@ final class SonosStore {
     }
 
     private func performAction(
-        for group: SonosGroupModel,
-        optimisticUpdate: ((inout SonosGroupModel) -> Void)? = nil,
+        optimisticUpdate: (() -> Void)? = nil,
         task: @escaping () async throws -> Void
     ) {
         guard !isPerformingAction else { return }
 
-        if let optimisticUpdate {
-            updateGroup(group, using: optimisticUpdate)
-        }
+        optimisticUpdate?()
 
         isPerformingAction = true
         errorMessage = nil
@@ -736,6 +771,13 @@ final class SonosStore {
         case .cloud:
             guard let index = cloudGroups.firstIndex(where: { $0.id == group.id }) else { return }
             transform(&cloudGroups[index])
+        }
+    }
+
+    private func modifyActiveGroups(_ transform: (inout [SonosGroupModel]) -> Void) {
+        switch activeSource {
+        case .local: transform(&localGroups)
+        case .cloud: transform(&cloudGroups)
         }
     }
 

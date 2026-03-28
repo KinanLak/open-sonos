@@ -2,8 +2,25 @@ import SwiftUI
 
 struct SonosSettingsView: View {
     let store: SonosStore
+    let hotkeyManager: HotkeyManager
 
     var body: some View {
+        TabView {
+            generalTab
+                .tabItem { Label("General", systemImage: "gearshape") }
+
+            shortcutsTab
+                .tabItem { Label("Shortcuts", systemImage: "keyboard") }
+        }
+        .frame(width: 460, height: 520)
+        .onAppear {
+            NSApp.activate()
+        }
+    }
+
+    // MARK: - General Tab
+
+    private var generalTab: some View {
         Form {
             connectionSection
             groupPickerSection
@@ -19,11 +36,48 @@ struct SonosSettingsView: View {
             cloudSection
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 520)
-        .onAppear {
-            NSApp.activate()
+    }
+
+    // MARK: - Shortcuts Tab
+
+    private var shortcutsTab: some View {
+        Form {
+            Section("Playback") {
+                shortcutRow(.playPause)
+                shortcutRow(.nextTrack)
+                shortcutRow(.previousTrack)
+            }
+
+            Section("Volume") {
+                shortcutRow(.volumeUp)
+                shortcutRow(.volumeDown)
+                shortcutRow(.toggleMute)
+            }
+
+            Section {
+                Text("Shortcuts work globally while the app is running. A Now Playing popup will appear briefly when a shortcut is triggered.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func shortcutRow(_ action: HotkeyAction) -> some View {
+        LabeledContent {
+            ShortcutRecorderView(
+                keyCombo: Binding(
+                    get: { hotkeyManager.bindings[action] },
+                    set: { hotkeyManager.setBinding($0, for: action) }
+                ),
+                hotkeyManager: hotkeyManager
+            )
+        } label: {
+            Label(action.displayName, systemImage: action.symbolName)
         }
     }
+
+    // MARK: - Connection
 
     @ViewBuilder
     private var connectionSection: some View {
@@ -65,6 +119,8 @@ struct SonosSettingsView: View {
         }
     }
 
+    // MARK: - Group Picker
+
     @ViewBuilder
     private var groupPickerSection: some View {
         if store.activeGroups.count > 1 {
@@ -84,6 +140,8 @@ struct SonosSettingsView: View {
             }
         }
     }
+
+    // MARK: - Room Volumes
 
     private func roomVolumeSection(_ group: SonosGroupModel) -> some View {
         Section("Room Volumes") {
@@ -111,6 +169,8 @@ struct SonosSettingsView: View {
         }
     }
 
+    // MARK: - Group Management
+
     @ViewBuilder
     private var groupManagementSection: some View {
         if let selectedGroup = store.selectedGroup {
@@ -119,6 +179,8 @@ struct SonosSettingsView: View {
             }
         }
     }
+
+    // MARK: - Cloud
 
     private var cloudSection: some View {
         Section("Sonos Cloud") {
@@ -154,6 +216,8 @@ struct SonosSettingsView: View {
             }
         }
     }
+
+    // MARK: - Helpers
 
     private func currentPlayers(for group: SonosGroupModel) -> [SonosPlayerModel] {
         (store.selectedGroup ?? group).players

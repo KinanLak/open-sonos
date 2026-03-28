@@ -3,8 +3,7 @@ import SwiftUI
 struct SonosMenuView: View {
     let store: SonosStore
     @Environment(\.openWindow) private var openWindow
-    @State private var showsGroupEdit = false
-    @State private var showsSpeakers = false
+    @State private var showsSpeakerList = false
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -28,12 +27,8 @@ struct SonosMenuView: View {
                     groupList
                 }
 
-                if let group = store.selectedGroup, group.players.count > 1 {
-                    speakerVolumeSection(group)
-                }
-
                 if store.selectedGroup != nil, store.selectedGroupManagementOptions.count > 1 {
-                    groupEditSection
+                    speakersSection
                 }
 
                 if let error = store.errorMessage {
@@ -86,102 +81,83 @@ struct SonosMenuView: View {
         .padding(6)
     }
 
-    // MARK: - Speaker volumes (custom disclosure)
+    // MARK: - Unified speakers section
 
-    private func speakerVolumeSection(_ group: SonosGroupModel) -> some View {
-        let currentGroup = store.selectedGroup ?? group
-        let sortedPlayers = currentGroup.players.sorted(by: \.name)
+    private var speakersSection: some View {
+        let options = store.selectedGroupManagementOptions
+        let activeCount = options.filter(\.isInSelectedGroup).count
 
         return VStack(spacing: 0) {
             disclosureHeader(
-                label: "\(currentGroup.players.count) speakers",
-                isExpanded: showsSpeakers
+                label: "\(activeCount) playing speaker\(activeCount == 1 ? "" : "s")",
+                isExpanded: showsSpeakerList
             ) {
                 updateDisclosureState {
-                    showsSpeakers.toggle()
+                    showsSpeakerList.toggle()
                 }
             }
 
-            if showsSpeakers {
-                VStack(spacing: 6) {
-                    ForEach(sortedPlayers) { player in
-                        HStack(spacing: 6) {
-                            Text(player.name)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 70, alignment: .leading)
-                                .lineLimit(1)
-
-                            SonosSlider(
-                                value: Binding(
-                                    get: { Double(resolvedVolume(for: player, in: currentGroup)) },
-                                    set: { store.setSelectedPlayerVolumeFromUI($0, playerID: player.id) }
-                                ),
-                                disabled: resolvedIsFixed(for: player, in: currentGroup),
-                                height: 4
-                            )
-
-                            Text("\(resolvedVolume(for: player, in: currentGroup))")
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.tertiary)
-                                .frame(width: 20, alignment: .trailing)
-                        }
+            if showsSpeakerList {
+                VStack(spacing: 4) {
+                    ForEach(options) { option in
+                        speakerRow(option: option)
                     }
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
+                .animation(.easeInOut(duration: 0.35), value: options.map(\.isInSelectedGroup))
             }
         }
     }
 
-    // MARK: - Group edit (custom disclosure)
+    private func speakerRow(option: SonosGroupManagementOption) -> some View {
+        let isActive = option.isInSelectedGroup
 
-    private var groupEditSection: some View {
-        VStack(spacing: 0) {
-            disclosureHeader(
-                label: "Edit group",
-                isExpanded: showsGroupEdit
-            ) {
-                updateDisclosureState {
-                    showsGroupEdit.toggle()
-                }
-            }
+        return HStack(spacing: 6) {
+            Button {
+                store.groupManagementActionTapped(option)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(isActive ? Color.accentColor : Color.secondary.opacity(0.4))
+                        .font(.caption)
 
-            if showsGroupEdit {
-                VStack(spacing: 1) {
-                    ForEach(store.selectedGroupManagementOptions) { option in
-                        Button {
-                            store.groupManagementActionTapped(option)
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: option.isInSelectedGroup ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(option.isInSelectedGroup ? Color.accentColor : Color.secondary.opacity(0.4))
-                                    .font(.caption)
+                    Text(option.player.name)
+                        .font(.caption)
+                        .foregroundStyle(isActive ? .primary : .secondary)
+                        .lineLimit(1)
 
-                                Text(option.player.name)
-                                    .font(.caption)
-                                    .foregroundStyle(.primary)
-
-                                if option.isCoordinator {
-                                    Image(systemName: "star.fill")
-                                        .font(.system(size: 7))
-                                        .foregroundStyle(Color.secondary)
-                                }
-
-                                Spacer()
-                            }
-                            .padding(.vertical, 3)
-                            .padding(.horizontal, 4)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(option.actionLabel == nil)
+                    if option.isCoordinator {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 7))
+                            .foregroundStyle(Color.secondary)
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 4)
+
+            if isActive {
+                SonosSlider(
+                    value: Binding(
+                        get: { Double(option.player.volume) },
+                        set: { store.setSelectedPlayerVolumeFromUI($0, playerID: option.player.id) }
+                    ),
+                    disabled: option.player.volumeIsFixed,
+                    height: 4
+                )
+                .frame(width: 80)
+
+                Text("\(option.player.volume)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 20, alignment: .trailing)
             }
         }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 4)
     }
 
     // MARK: - Shared disclosure header
@@ -261,14 +237,6 @@ struct SonosMenuView: View {
     }
 
     // MARK: - Helpers
-
-    private func resolvedVolume(for player: SonosPlayerModel, in group: SonosGroupModel) -> Int {
-        group.players.first(where: { $0.id == player.id })?.volume ?? player.volume
-    }
-
-    private func resolvedIsFixed(for player: SonosPlayerModel, in group: SonosGroupModel) -> Bool {
-        group.players.first(where: { $0.id == player.id })?.volumeIsFixed ?? player.volumeIsFixed
-    }
 
     private func updateDisclosureState(_ action: () -> Void) {
         var transaction = Transaction()
