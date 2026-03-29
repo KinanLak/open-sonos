@@ -76,3 +76,6 @@ The callback page forwards the Sonos authorization code to `opensonos://oauth-ca
 - the `workers.dev` hostname is account-specific, so the broker URL must be copied once after deploy
 - no widgets, shortcuts, AppleScript, guest-mode polish, or event subscriptions yet
 - no event subscriptions yet; refresh uses polling
+
+## Attibutions
+GetSongBPM.com (https://getsongbpm.com)
