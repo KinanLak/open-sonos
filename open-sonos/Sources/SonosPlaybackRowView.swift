@@ -10,9 +10,15 @@ struct SonosPlaybackRowView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(group.track?.title ?? "Nothing playing")
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text(group.track?.title ?? "Nothing playing")
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+
+                        if group.isPlaying {
+                            AnimatedWaveformView.small(isAnimating: true, bpm: store.currentBPM)
+                        }
+                    }
 
                     Text(group.nowPlayingSummary)
                         .font(.caption)
@@ -20,20 +26,26 @@ struct SonosPlaybackRowView: View {
                         .lineLimit(1)
                 }
 
-                HStack(spacing: 16) {
+                HStack(spacing: 4) {
                     Button { store.previousTrackButtonTapped() } label: {
                         Image(systemName: "backward.fill")
                             .font(.caption)
+                            .frame(width: 30, height: 26)
+                            .contentShape(Rectangle())
                     }
 
                     Button { store.togglePlaybackButtonTapped() } label: {
                         Image(systemName: group.playbackState.symbolName)
                             .font(.body.weight(.semibold))
+                            .frame(width: 30, height: 26)
+                            .contentShape(Rectangle())
                     }
 
                     Button { store.nextTrackButtonTapped() } label: {
                         Image(systemName: "forward.fill")
                             .font(.caption)
+                            .frame(width: 30, height: 26)
+                            .contentShape(Rectangle())
                     }
 
                     Spacer()
@@ -42,6 +54,8 @@ struct SonosPlaybackRowView: View {
                         Image(systemName: group.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                             .font(.caption)
                             .foregroundStyle(group.isMuted ? .red : .secondary)
+                            .frame(width: 30, height: 26)
+                            .contentShape(Rectangle())
                     }
                 }
                 .buttonStyle(.plain)

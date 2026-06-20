@@ -22,16 +22,74 @@ final class SonosStore {
     var isRefreshing = false
     var isPerformingAction = false
     var isCloudAuthenticating = false
+    var isSpotifyRefreshing = false
     var errorMessage: String?
     var statusMessage = "Ready to scan your Sonos system"
     var cloudStatusMessage = "Cloud not configured"
+    var spotifyStatusMessage = "Spotify disabled"
     var lastUpdatedAt: Date?
 
-    var cloudBrokerURLDraft: String
+    var cloudBrokerURLDraft: String {
+        didSet {
+            userDefaults.set(cloudBrokerURLDraft, forKey: DefaultsKeys.cloudBrokerURL)
+            cloudStatusMessage = isCloudConfigured ? "Cloud configured" : initialCloudStatusMessage
+        }
+    }
+    var isSpotifyTransferEnabled: Bool = false {
+        didSet {
+            userDefaults.set(isSpotifyTransferEnabled, forKey: DefaultsKeys.spotifyTransferEnabled)
+            if isSpotifyTransferEnabled {
+                Task { await refreshSpotifyDesktopState() }
+            } else {
+                spotifyDesktopDevices = []
+                spotifyDesktopActiveDeviceID = nil
+                spotifyStatusMessage = "Spotify disabled"
+            }
+        }
+    }
+    var spotifyDesktopStatus = SpotifyDesktopStatus(helperInstalled: false, appRunning: false, isLoggedIn: false)
+    var spotifyDesktopDevices: [SpotifyDesktopDevice] = []
+    var spotifyDesktopActiveDeviceID: String?
+
+    // BPM sync
+    var currentBPM: Double?
+    var isBPMSyncEnabled: Bool = false {
+        didSet {
+            userDefaults.set(isBPMSyncEnabled, forKey: DefaultsKeys.bpmEnabled)
+            if isBPMSyncEnabled {
+                lastBPMTrackKey = nil
+                refreshBPMIfNeeded()
+            } else {
+                currentBPM = nil
+                lastBPMTrackKey = nil
+                bpmStatusMessage = ""
+            }
+        }
+    }
+    var bpmStatusMessage = ""
+
+    // Waveform animation
+    var waveformFPS: Double = 10 {
+        didSet { userDefaults.set(waveformFPS, forKey: DefaultsKeys.waveformFPS) }
+    }
 
     @ObservationIgnored private let discoveryClient: SonosDiscoveryClient
     @ObservationIgnored private let controlClient: SonosControlClient
     @ObservationIgnored private let cloudClient: SonosCloudClient
+    @ObservationIgnored private let spotifyDesktopClient: SpotifyDesktopClient
+    @ObservationIgnored private let bpmClient = BPMClient()
+    @ObservationIgnored private let localEventClient = SonosLocalEventClient()
+    @ObservationIgnored private let cloudRelayClient = SonosCloudRelayClient()
+    @ObservationIgnored private var topologyRefreshTask: Task<Void, Never>?
+    // Bumped on every optimistic UI mutation. A full refresh that was already in
+    // flight when the user acted must not overwrite the optimistic state with a
+    // pre-action (stale) snapshot — it checks this epoch before applying.
+    @ObservationIgnored private var actionEpoch = 0
+    // After the user toggles play/pause, the speaker may take time to actually
+    // start (buffering), reporting transient non-target states meanwhile. We hold
+    // the intended state against those contradicting events until it's confirmed
+    // or this lock expires.
+    @ObservationIgnored private var pendingPlaybackIntent: PlaybackIntent?
     @ObservationIgnored private let userDefaults: UserDefaults
     @ObservationIgnored private let keychain: SonosKeychainStore
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
@@ -40,17 +98,21 @@ final class SonosStore {
     @ObservationIgnored private var hasStarted = false
     @ObservationIgnored private var pendingOAuthState: String?
     @ObservationIgnored private var cloudSession: SonosCloudSession?
+    @ObservationIgnored private var lastBPMTrackKey: String?
+    @ObservationIgnored private var lastUsedSonosPlayerNames: [String]
 
     init(
         discoveryClient: SonosDiscoveryClient = SonosDiscoveryClient(),
         controlClient: SonosControlClient = SonosControlClient(),
         cloudClient: SonosCloudClient = SonosCloudClient(),
+        spotifyDesktopClient: SpotifyDesktopClient = SpotifyDesktopClient(),
         userDefaults: UserDefaults = .standard,
         keychain: SonosKeychainStore = SonosKeychainStore()
     ) {
         self.discoveryClient = discoveryClient
         self.controlClient = controlClient
         self.cloudClient = cloudClient
+        self.spotifyDesktopClient = spotifyDesktopClient
         self.userDefaults = userDefaults
         self.keychain = keychain
 
@@ -60,11 +122,22 @@ final class SonosStore {
         self.selectedCloudHouseholdID = userDefaults.string(forKey: DefaultsKeys.selectedCloudHouseholdID)
         self.preferredSource = SonosConnectionSource(rawValue: userDefaults.string(forKey: DefaultsKeys.preferredSource) ?? "local") ?? .local
         self.cloudSession = Self.loadCloudSession(from: keychain)
+        self.lastUsedSonosPlayerNames = userDefaults.stringArray(forKey: DefaultsKeys.lastUsedSonosPlayerNames) ?? []
         self.cloudStatusMessage = initialCloudStatusMessage
+        self.isSpotifyTransferEnabled = userDefaults.bool(forKey: DefaultsKeys.spotifyTransferEnabled)
+        self.spotifyStatusMessage = isSpotifyTransferEnabled ? "Checking Spotify..." : "Spotify disabled"
+
+        // BPM
+        self.isBPMSyncEnabled = userDefaults.bool(forKey: DefaultsKeys.bpmEnabled)
+
+        // Waveform FPS
+        let savedFPS = userDefaults.double(forKey: DefaultsKeys.waveformFPS)
+        self.waveformFPS = savedFPS > 0 ? savedFPS : 10
     }
 
     deinit {
         refreshTask?.cancel()
+        topologyRefreshTask?.cancel()
     }
 
     var activeSource: SonosConnectionSource {
@@ -154,6 +227,10 @@ final class SonosStore {
         cloudSession != nil
     }
 
+    var isSpotifyDesktopReady: Bool {
+        spotifyDesktopStatus.isReady
+    }
+
     var cloudSetupHint: String {
         "Use an HTTPS OAuth broker that holds the Sonos client secret and exchanges tokens on behalf of OpenSonos."
     }
@@ -161,7 +238,16 @@ final class SonosStore {
     func startIfNeeded() async {
         guard !hasStarted else { return }
         hasStarted = true
+        await localEventClient.setEventHandler { [weak self] event in
+            await self?.applyLocalEvent(event)
+        }
+        await cloudRelayClient.setEventHandler { [weak self] event in
+            await self?.applyCloudEvent(event)
+        }
         await refreshAll()
+        if isSpotifyTransferEnabled {
+            await refreshSpotifyDesktopState()
+        }
         startRefreshLoop()
     }
 
@@ -262,6 +348,65 @@ final class SonosStore {
         preferredSource = .local
         cloudStatusMessage = isCloudConfigured ? "Cloud configured" : initialCloudStatusMessage
         updateStatusFromActiveSource()
+        Task { await cloudRelayClient.disconnect() }
+    }
+
+    func setSpotifyTransferEnabled(_ isEnabled: Bool) {
+        if !isEnabled {
+            isSpotifyTransferEnabled = false
+            return
+        }
+
+        Task {
+            await refreshSpotifyDesktopState()
+            await MainActor.run {
+                if self.spotifyDesktopStatus.isReady {
+                    self.isSpotifyTransferEnabled = true
+                    self.spotifyStatusMessage = "Spotify Connect ready"
+                } else {
+                    self.isSpotifyTransferEnabled = false
+                    self.errorMessage = self.spotifyStatusMessage
+                }
+            }
+        }
+    }
+
+    func refreshSpotifyDesktopState() async {
+        guard !isSpotifyRefreshing else { return }
+        isSpotifyRefreshing = true
+        defer { isSpotifyRefreshing = false }
+
+        do {
+            let status = try await spotifyDesktopClient.status()
+            spotifyDesktopStatus = status
+
+            guard status.isReady else {
+                spotifyDesktopDevices = []
+                spotifyDesktopActiveDeviceID = nil
+                spotifyStatusMessage = Self.spotifyStatusMessage(for: status)
+                return
+            }
+
+            let snapshot = try await spotifyDesktopClient.listDevices()
+            spotifyDesktopDevices = snapshot.devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            spotifyDesktopActiveDeviceID = snapshot.activeDeviceID
+            spotifyStatusMessage = spotifyDesktopDevices.isEmpty ? "No Spotify Connect devices" : "Spotify Connect ready"
+        } catch {
+            spotifyDesktopDevices = []
+            spotifyDesktopActiveDeviceID = nil
+            spotifyStatusMessage = error.localizedDescription
+        }
+    }
+
+    func transferSpotifyPlayback(to device: SpotifyDesktopDevice) {
+        performAction {
+            try await self.spotifyDesktopClient.transferPlayback(to: device.deviceID)
+            await MainActor.run {
+                self.spotifyDesktopActiveDeviceID = device.deviceID
+                self.spotifyStatusMessage = "Transferred to \(device.name)"
+            }
+            await self.refreshSpotifyDesktopState()
+        }
     }
 
     func setPreferredSource(_ source: SonosConnectionSource) {
@@ -271,6 +416,7 @@ final class SonosStore {
         }
 
         preferredSource = source
+        Task { await syncCloudRelay() }
     }
 
     func selectGroup(_ group: SonosGroupModel) {
@@ -282,6 +428,8 @@ final class SonosStore {
             selectedCloudGroupID = group.id
             userDefaults.set(group.id, forKey: DefaultsKeys.selectedCloudGroupID)
         }
+        rememberSonosTarget(group)
+        syncLocalSubscriptions()
     }
 
     func selectHousehold(_ household: SonosHouseholdModel) {
@@ -294,10 +442,25 @@ final class SonosStore {
         Task { await refreshAll() }
     }
 
+    /// Called when the menu bar popover is opened. Real-time events keep state
+    /// fresh while subscriptions are healthy, but an immediate refresh on open
+    /// guarantees a current snapshot even if events were missed or dropped.
+    func menuDidOpen() {
+        Task { await refreshAll() }
+    }
+
     func togglePlaybackButtonTapped() {
         guard let group = selectedGroup else { return }
+        rememberSonosTarget(group)
+        let targetState: SonosPlaybackState = group.isPlaying ? .paused : .playing
+        pendingPlaybackIntent = PlaybackIntent(
+            groupID: group.id,
+            coordinatorID: group.coordinatorID,
+            state: targetState,
+            expiresAt: Date().addingTimeInterval(8)
+        )
         performAction(optimisticUpdate: {
-            self.updateGroup(group) { $0.playbackState = $0.playbackState == .playing ? .paused : .playing }
+            self.updateGroup(group) { $0.playbackState = targetState }
         }) {
             switch group.source {
             case .local:
@@ -315,6 +478,7 @@ final class SonosStore {
 
     func nextTrackButtonTapped() {
         guard let group = selectedGroup else { return }
+        rememberSonosTarget(group)
         performAction {
             switch group.source {
             case .local:
@@ -328,6 +492,7 @@ final class SonosStore {
 
     func previousTrackButtonTapped() {
         guard let group = selectedGroup else { return }
+        rememberSonosTarget(group)
         performAction {
             switch group.source {
             case .local:
@@ -341,6 +506,7 @@ final class SonosStore {
 
     func toggleMuteButtonTapped() {
         guard let group = selectedGroup else { return }
+        rememberSonosTarget(group)
         let targetMute = !group.isMuted
         performAction(optimisticUpdate: {
             self.updateGroup(group) { $0.isMuted = targetMute }
@@ -357,6 +523,7 @@ final class SonosStore {
 
     func setSelectedVolumeFromUI(_ value: Double) {
         guard let group = selectedGroup, !group.volumeIsFixed else { return }
+        rememberSonosTarget(group)
         let roundedValue = Int(value.rounded())
         updateGroup(group) { $0.volume = roundedValue }
 
@@ -388,6 +555,7 @@ final class SonosStore {
         guard let group = selectedGroup,
               let player = group.players.first(where: { $0.id == playerID }),
               !player.volumeIsFixed else { return }
+        rememberSonosTarget(group)
 
         let roundedValue = Int(value.rounded())
         updateGroup(group) { currentGroup in
@@ -416,10 +584,53 @@ final class SonosStore {
     }
 
     func groupManagementActionTapped(_ option: SonosGroupManagementOption) {
+        if let selectedGroup {
+            rememberSonosTarget(selectedGroup)
+        }
+
         if option.canJoinSelectedGroup {
             addPlayerToSelectedGroup(option.player.id)
         } else if option.canLeaveSelectedGroup {
             removePlayerFromSelectedGroup(option.player.id)
+        }
+    }
+
+    // MARK: - Spotify
+
+    func refreshBPMIfNeeded() {
+        guard isBPMSyncEnabled, let track = selectedGroup?.track else {
+            if selectedGroup?.isPlaying != true { currentBPM = nil }
+            return
+        }
+
+        let key = "\(track.title)|\(track.artist ?? "")"
+        guard key != lastBPMTrackKey else { return }
+        lastBPMTrackKey = key
+        bpmStatusMessage = "Searching..."
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let tempo = try await self.bpmClient.searchBPM(
+                    title: track.title,
+                    artist: track.artist
+                )
+
+                await MainActor.run {
+                    if let tempo {
+                        self.currentBPM = tempo
+                        self.bpmStatusMessage = "\(Int(tempo)) BPM"
+                    } else {
+                        self.currentBPM = nil
+                        self.bpmStatusMessage = "Track not found"
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.currentBPM = nil
+                    self.bpmStatusMessage = "Error: \(error.localizedDescription)"
+                }
+            }
         }
     }
 
@@ -433,6 +644,22 @@ final class SonosStore {
         }
 
         return "Cloud not configured"
+    }
+
+    private static func spotifyStatusMessage(for status: SpotifyDesktopStatus) -> String {
+        if !status.helperInstalled {
+            return "Install Spotify Desktop to enable Spotify Connect."
+        }
+
+        if !status.appRunning {
+            return "Open Spotify Desktop to enable Spotify Connect."
+        }
+
+        if !status.isLoggedIn {
+            return "Log in to Spotify Desktop to enable Spotify Connect."
+        }
+
+        return "Spotify Connect ready"
     }
 
     private var cloudConfiguration: SonosCloudConfiguration? {
@@ -451,7 +678,9 @@ final class SonosStore {
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             while let self, !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 12_000_000_000)
+                // Safety-net poll only — real-time GENA/WebSocket events drive most
+                // updates now, so this just reconciles anything events missed.
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
                 guard !Task.isCancelled else { return }
                 await self.refreshAll()
             }
@@ -464,8 +693,9 @@ final class SonosStore {
         isRefreshing = true
         errorMessage = nil
 
-        let localError = await refreshLocalState()
-        let cloudError = await refreshCloudStateIfNeeded()
+        let epoch = actionEpoch
+        let localError = await refreshLocalState(epoch: epoch)
+        let cloudError = await refreshCloudStateIfNeeded(epoch: epoch)
 
         lastUpdatedAt = Date()
         isRefreshing = false
@@ -477,24 +707,203 @@ final class SonosStore {
             errorMessage = cloudError?.localizedDescription
         }
 
+        applyPendingPlaybackIntent()
         updateStatusFromActiveSource()
+        rememberPlayingSonosTarget()
+        refreshBPMIfNeeded()
+        syncLocalSubscriptions()
+        await syncCloudRelay()
+        if isSpotifyTransferEnabled {
+            await refreshSpotifyDesktopState()
+        }
     }
 
-    private func refreshLocalState() async -> Error? {
+    /// Points the local GENA subscriptions at the selected local group's coordinator.
+    /// Cheap to call repeatedly — the event client ignores no-op retargets.
+    private func syncLocalSubscriptions() {
+        guard let group = localGroups.first(where: { $0.id == selectedLocalGroupID }) ?? localGroups.first,
+              let baseURL = group.coordinatorBaseURL else { return }
+        let coordinatorID = group.coordinatorID
+        Task { await localEventClient.setTarget(coordinatorID: coordinatorID, baseURL: baseURL) }
+    }
+
+    /// Applies a real-time UPnP event to local state without a full rediscovery.
+    private func applyLocalEvent(_ event: SonosLocalEvent) {
+        switch event {
+        case let .transport(coordinatorID, state, track):
+            guard let index = localGroups.firstIndex(where: { $0.coordinatorID == coordinatorID }) else { return }
+            if let state, shouldApplyPlaybackState(state, groupID: localGroups[index].id, coordinatorID: coordinatorID) {
+                localGroups[index].playbackState = state
+            }
+            if case let .updated(newTrack) = track {
+                localGroups[index].track = newTrack
+                resolveArtworkIfNeeded(forCoordinatorID: coordinatorID)
+            }
+            lastUpdatedAt = Date()
+            rememberPlayingSonosTarget()
+            refreshBPMIfNeeded()
+
+        case let .groupVolume(coordinatorID, volume, muted):
+            guard let index = localGroups.firstIndex(where: { $0.coordinatorID == coordinatorID }) else { return }
+            if let volume {
+                localGroups[index].volume = volume
+            }
+            if let muted {
+                localGroups[index].isMuted = muted
+            }
+            lastUpdatedAt = Date()
+
+        case .topologyChanged:
+            // Topology events can burst during regrouping — debounce a single rebuild.
+            topologyRefreshTask?.cancel()
+            topologyRefreshTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self, !Task.isCancelled else { return }
+                _ = await self.refreshLocalState(epoch: self.actionEpoch)
+                self.updateStatusFromActiveSource()
+                self.syncLocalSubscriptions()
+                self.lastUpdatedAt = Date()
+            }
+        }
+    }
+
+    /// Connects (or reconfigures) the cloud relay for the active household's groups.
+    /// Only runs when the cloud source is active; disconnects otherwise.
+    private func syncCloudRelay() async {
+        guard activeSource == .cloud,
+              let configuration = cloudConfiguration,
+              let householdID = selectedCloudHouseholdID ?? cloudHouseholds.first?.id,
+              !cloudGroups.isEmpty else {
+            await cloudRelayClient.disconnect()
+            return
+        }
+
+        guard let accessToken = try? await validCloudAccessToken() else { return }
+        let groupIDs = cloudGroups.map(\.id)
+        await cloudRelayClient.connect(
+            brokerBaseURL: configuration.brokerBaseURL,
+            householdID: householdID,
+            groupIDs: groupIDs,
+            accessToken: accessToken
+        )
+    }
+
+    /// Applies a real-time cloud event (relayed from a Sonos webhook) to cloud state.
+    private func applyCloudEvent(_ event: SonosCloudEvent) {
+        switch event {
+        case let .playback(groupID, state):
+            guard let index = cloudGroups.firstIndex(where: { $0.id == groupID }) else { return }
+            if shouldApplyPlaybackState(state, groupID: groupID, coordinatorID: nil) {
+                cloudGroups[index].playbackState = state
+            }
+            lastUpdatedAt = Date()
+            rememberPlayingSonosTarget()
+            refreshBPMIfNeeded()
+
+        case let .metadata(groupID, track):
+            guard let index = cloudGroups.firstIndex(where: { $0.id == groupID }) else { return }
+            cloudGroups[index].track = track
+            lastUpdatedAt = Date()
+            refreshBPMIfNeeded()
+
+        case let .groupVolume(groupID, volume, muted):
+            guard let index = cloudGroups.firstIndex(where: { $0.id == groupID }) else { return }
+            if let volume {
+                cloudGroups[index].volume = volume
+            }
+            if let muted {
+                cloudGroups[index].isMuted = muted
+            }
+            lastUpdatedAt = Date()
+
+        case .groupsChanged:
+            Task { [weak self] in
+                guard let self else { return }
+                _ = await self.refreshCloudStateIfNeeded(epoch: self.actionEpoch)
+                self.updateStatusFromActiveSource()
+                await self.syncCloudRelay()
+                self.lastUpdatedAt = Date()
+            }
+        }
+    }
+
+    /// Whether an incoming playback state should be applied, given a pending toggle
+    /// intent. Transient states that contradict the intent are held off until the
+    /// intended state is confirmed or the lock expires.
+    private func shouldApplyPlaybackState(_ state: SonosPlaybackState, groupID: String, coordinatorID: String?) -> Bool {
+        guard let intent = pendingPlaybackIntent else { return true }
+
+        if Date() >= intent.expiresAt {
+            pendingPlaybackIntent = nil
+            return true
+        }
+
+        let matchesTarget = intent.groupID == groupID || (coordinatorID != nil && intent.coordinatorID == coordinatorID)
+        guard matchesTarget else { return true }
+
+        if state == intent.state {
+            pendingPlaybackIntent = nil // intent confirmed by the speaker
+            return true
+        }
+
+        return false // contradicting transient state — keep showing the intended one
+    }
+
+    /// Re-asserts a pending toggle intent over freshly-fetched state so a full
+    /// refresh landing mid-buffer can't momentarily paint the transient state.
+    private func applyPendingPlaybackIntent() {
+        guard let intent = pendingPlaybackIntent else { return }
+        if Date() >= intent.expiresAt {
+            pendingPlaybackIntent = nil
+            return
+        }
+
+        if let index = localGroups.firstIndex(where: { $0.id == intent.groupID || $0.coordinatorID == intent.coordinatorID }) {
+            localGroups[index].playbackState = intent.state
+        }
+        if let index = cloudGroups.firstIndex(where: { $0.id == intent.groupID }) {
+            cloudGroups[index].playbackState = intent.state
+        }
+    }
+
+    /// Fills in album art for an event-updated track when the DIDL metadata omitted it.
+    private func resolveArtworkIfNeeded(forCoordinatorID coordinatorID: String) {
+        guard let index = localGroups.firstIndex(where: { $0.coordinatorID == coordinatorID }),
+              let track = localGroups[index].track,
+              track.albumArtURL == nil else { return }
+
+        let title = track.title
+        let artist = track.artist
+        let album = track.album
+
+        Task { @MainActor [weak self] in
+            let url = await ArtworkFallbackClient.shared.artworkURL(artist: artist, album: album, title: title)
+            guard let self, let url,
+                  let index = self.localGroups.firstIndex(where: { $0.coordinatorID == coordinatorID }),
+                  self.localGroups[index].track?.title == title,
+                  self.localGroups[index].track?.albumArtURL == nil else { return }
+            self.localGroups[index].track?.albumArtURL = url
+        }
+    }
+
+    private func refreshLocalState(epoch: Int) async -> Error? {
         do {
             let discoveredGroups = try await discoveryClient.discoverGroups()
+            // A user acted while this refresh was in flight — its data predates the
+            // optimistic change, so discard it rather than clobber the new state.
+            guard epoch == actionEpoch else { return nil }
             localGroups = discoveredGroups.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             reconcileLocalSelection()
             return nil
         } catch {
-            if activeSource == .local {
+            if activeSource == .local, epoch == actionEpoch {
                 localGroups = []
             }
             return error
         }
     }
 
-    private func refreshCloudStateIfNeeded() async -> Error? {
+    private func refreshCloudStateIfNeeded(epoch: Int) async -> Error? {
         guard cloudSession != nil else {
             cloudGroups = []
             cloudHouseholds = []
@@ -526,11 +935,16 @@ final class SonosStore {
                 )
             }
 
+            // A user acted while this refresh was in flight — discard the stale
+            // snapshot rather than overwrite the optimistic state.
+            guard epoch == actionEpoch else { return nil }
             cloudHouseholds = households
             reconcileCloudHouseholdSelection()
 
             if let selectedCloudHouseholdID, let envelope = envelopeByHouseholdID[selectedCloudHouseholdID] {
-                cloudGroups = try await buildCloudGroups(householdID: selectedCloudHouseholdID, envelope: envelope, accessToken: accessToken)
+                let builtGroups = try await buildCloudGroups(householdID: selectedCloudHouseholdID, envelope: envelope, accessToken: accessToken)
+                guard epoch == actionEpoch else { return nil }
+                cloudGroups = builtGroups
             } else {
                 cloudGroups = []
             }
@@ -539,7 +953,9 @@ final class SonosStore {
             cloudStatusMessage = "Connected to Sonos Cloud"
             return nil
         } catch {
-            cloudGroups = []
+            if epoch == actionEpoch {
+                cloudGroups = []
+            }
             cloudStatusMessage = "Cloud refresh failed"
             return error
         }
@@ -749,11 +1165,14 @@ final class SonosStore {
             guard let self else { return }
 
             do {
+                // No post-action refresh: the optimistic update gives instant feedback
+                // and real-time events reconcile the true state moments later. A full
+                // refresh here would briefly paint a stale (pre-transition) snapshot.
                 try await task()
-                await self.refreshAll()
             } catch {
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription
+                    self.pendingPlaybackIntent = nil // failed — let the real state show
                 }
             }
 
@@ -764,6 +1183,7 @@ final class SonosStore {
     }
 
     private func updateGroup(_ group: SonosGroupModel, using transform: (inout SonosGroupModel) -> Void) {
+        actionEpoch &+= 1
         switch group.source {
         case .local:
             guard let index = localGroups.firstIndex(where: { $0.id == group.id }) else { return }
@@ -775,6 +1195,7 @@ final class SonosStore {
     }
 
     private func modifyActiveGroups(_ transform: (inout [SonosGroupModel]) -> Void) {
+        actionEpoch &+= 1
         switch activeSource {
         case .local: transform(&localGroups)
         case .cloud: transform(&cloudGroups)
@@ -794,6 +1215,18 @@ final class SonosStore {
         }
 
         return currentSession.accessToken
+    }
+
+    private func rememberPlayingSonosTarget() {
+        guard let group = activeGroups.first(where: { $0.isPlaying }) else { return }
+        rememberSonosTarget(group)
+    }
+
+    private func rememberSonosTarget(_ group: SonosGroupModel) {
+        userDefaults.set(group.name, forKey: DefaultsKeys.lastUsedSonosGroupName)
+        let playerNames = group.players.map(\.name).filter { $0.nilIfBlank != nil }
+        lastUsedSonosPlayerNames = playerNames
+        userDefaults.set(playerNames, forKey: DefaultsKeys.lastUsedSonosPlayerNames)
     }
 
     private func persistCloudSession(_ session: SonosCloudSession) {
@@ -817,6 +1250,13 @@ final class SonosStore {
     }
 }
 
+private struct PlaybackIntent {
+    let groupID: String
+    let coordinatorID: String
+    let state: SonosPlaybackState
+    let expiresAt: Date
+}
+
 private enum DefaultsKeys {
     static let selectedLocalGroupID = "selectedLocalGroupID"
     static let selectedCloudGroupID = "selectedCloudGroupID"
@@ -824,6 +1264,11 @@ private enum DefaultsKeys {
     static let preferredSource = "preferredSonosSource"
     static let cloudBrokerURL = "cloudBrokerURL"
     static let defaultCloudBrokerURL = "https://open-sonos-oauth-broker.kinan-lakh.workers.dev"
+    static let spotifyTransferEnabled = "spotifyTransferEnabled"
+    static let lastUsedSonosGroupName = "lastUsedSonosGroupName"
+    static let lastUsedSonosPlayerNames = "lastUsedSonosPlayerNames"
+    static let bpmEnabled = "bpmSyncEnabled"
+    static let waveformFPS = "waveformFPS"
 }
 
 private enum KeychainKeys {

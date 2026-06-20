@@ -13,9 +13,19 @@ struct NowPlayingView: View {
 
                     VStack(alignment: .leading, spacing: 6) {
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(group.track?.title ?? "Nothing playing")
-                                .font(.system(size: 13, weight: .semibold))
-                                .lineLimit(1)
+                            HStack(spacing: 5) {
+                                Text(group.track?.title ?? "Nothing playing")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .lineLimit(1)
+
+                                if group.isPlaying {
+                                    AnimatedWaveformView.small(
+                                        isAnimating: true,
+                                        color: .secondary,
+                                        bpm: store.currentBPM
+                                    )
+                                }
+                            }
 
                             Text(group.nowPlayingSummary)
                                 .font(.system(size: 11))

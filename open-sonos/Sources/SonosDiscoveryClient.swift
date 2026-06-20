@@ -333,11 +333,14 @@ actor SonosDiscoveryClient {
             )
 
             let metadata = SonosXML.firstValue(for: "TrackMetaData", in: response) ?? ""
-            if let track = SonosParsing.parseTrackMetadata(xml: metadata, baseURL: baseURL) {
+            let rawTrackURI = SonosXML.firstValue(for: "TrackURI", in: response)?.nilIfBlank
+
+            if var track = SonosParsing.parseTrackMetadata(xml: metadata, baseURL: baseURL) {
+                track.trackURI = rawTrackURI
                 return track
             }
 
-            if let trackURI = SonosXML.firstValue(for: "TrackURI", in: response)?.nilIfBlank {
+            if let trackURI = rawTrackURI {
                 let fallbackTitle = URL(string: trackURI)?.lastPathComponent.removingPercentEncoding?.nilIfBlank
                 if let fallbackTitle {
                     return SonosTrackModel(
@@ -346,7 +349,8 @@ actor SonosDiscoveryClient {
                         album: nil,
                         albumArtURL: nil,
                         containerName: nil,
-                        streamInfo: nil
+                        streamInfo: nil,
+                        trackURI: trackURI
                     )
                 }
             }

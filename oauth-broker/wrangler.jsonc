@@ -10,5 +10,13 @@
   "vars": {
     "SONOS_CLIENT_ID": "8cc1f9e8-0dc0-48c7-b435-9ada641763dd",
     "SONOS_REDIRECT_URI": "https://open-sonos.kinan.fr/sonos-oauth-callback.html"
-  }
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "RELAY", "class_name": "SonosRelay" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SonosRelay"] }
+  ]
 }

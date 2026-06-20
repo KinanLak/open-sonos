@@ -30,7 +30,12 @@ let project = Project(
             ]),
             sources: ["open-sonos/Sources/**"],
             resources: ["open-sonos/Resources/**"],
-            dependencies: []
+            dependencies: [],
+            settings: .settings(base: [
+                "CODE_SIGN_STYLE": "Manual",
+                "DEVELOPMENT_TEAM": "D793768BHW",
+                "CODE_SIGN_IDENTITY": "Apple Development: Kinan Lakhdar (V76QWH4L33)",
+            ])
         ),
         .target(
             name: "OpenSonosTests",

@@ -16,6 +16,24 @@ enum SonosXML {
         return decodeEntities(String(xml[range])).nilIfBlank
     }
 
+    /// Extracts the value of an attribute (e.g. `val`) on the first matching tag.
+    /// UPnP `LastChange` events encode state as attributes: `<TransportState val="PLAYING"/>`.
+    static func firstAttributeValue(for tag: String, attribute: String = "val", in xml: String) -> String? {
+        let escapedTag = NSRegularExpression.escapedPattern(for: tag)
+        let escapedAttribute = NSRegularExpression.escapedPattern(for: attribute)
+        let pattern = "<(?:\\w+:)?\(escapedTag)\\b[^>]*?\\b\(escapedAttribute)\\s*=\\s*\"([^\"]*)\""
+
+        guard
+            let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators, .caseInsensitive]),
+            let match = regex.firstMatch(in: xml, options: [], range: NSRange(xml.startIndex..., in: xml)),
+            let range = Range(match.range(at: 1), in: xml)
+        else {
+            return nil
+        }
+
+        return decodeEntities(String(xml[range]))
+    }
+
     static func decodeEntities(_ value: String) -> String {
         value
             .replacingOccurrences(of: "&lt;", with: "<")

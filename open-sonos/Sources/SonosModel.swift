@@ -70,6 +70,12 @@ struct SonosTrackModel: Hashable {
     var albumArtURL: URL?
     var containerName: String?
     var streamInfo: String?
+    var trackURI: String?
+
+    var spotifyTrackID: String? {
+        guard let trackURI else { return nil }
+        return SpotifyIDParser.extractTrackID(from: trackURI)
+    }
 
     var subtitle: String {
         let components = [artist, album]

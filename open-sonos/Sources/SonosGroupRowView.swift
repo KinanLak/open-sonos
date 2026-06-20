@@ -3,6 +3,7 @@ import SwiftUI
 struct SonosGroupRowView: View {
     let group: SonosGroupModel
     let isSelected: Bool
+    var bpm: Double? = nil
     let onSelect: () -> Void
 
     var body: some View {
@@ -33,9 +34,7 @@ struct SonosGroupRowView: View {
                 }
 
                 if group.isPlaying {
-                    Image(systemName: "waveform")
-                        .font(.caption2)
-                        .foregroundStyle(Color.accentColor)
+                    AnimatedWaveformView.small(isAnimating: true, bpm: bpm)
                 }
             }
             .padding(.vertical, 5)

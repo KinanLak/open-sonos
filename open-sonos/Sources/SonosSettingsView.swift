@@ -6,6 +6,7 @@ struct SonosSettingsView: View {
     let hotkeyManager: HotkeyManager
 
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var isEditingBrokerURL = false
 
     var body: some View {
         TabView {
@@ -18,6 +19,7 @@ struct SonosSettingsView: View {
         .frame(width: 460, height: 520)
         .onAppear {
             NSApp.activate()
+            Task { await store.refreshSpotifyDesktopState() }
         }
     }
 
@@ -41,6 +43,9 @@ struct SonosSettingsView: View {
             }
 
             connectionSection
+            waveformSection
+            spotifySection
+            cloudSection
             groupPickerSection
 
             if let group = store.selectedGroup, group.players.count > 1 {
@@ -50,8 +55,6 @@ struct SonosSettingsView: View {
             if store.selectedGroup != nil {
                 groupManagementSection
             }
-
-            cloudSection
         }
         .formStyle(.grouped)
     }
@@ -198,31 +201,99 @@ struct SonosSettingsView: View {
         }
     }
 
+    // MARK: - Waveform
+
+    private var waveformSection: some View {
+        Section("Waveform") {
+            Toggle("Sync waveform animation to BPM", isOn: Binding(
+                get: { store.isBPMSyncEnabled },
+                set: { store.isBPMSyncEnabled = $0 }
+            ))
+
+            if store.isBPMSyncEnabled, !store.bpmStatusMessage.isEmpty {
+                Text(store.bpmStatusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            LabeledContent("Waveform FPS (menu bar)") {
+                HStack(spacing: 8) {
+                    let steps: [Double] = [5, 10, 15, 20, 24, 30, 60, 120]
+                    let currentIndex = Double(steps.enumerated().min(by: {
+                        abs($0.element - store.waveformFPS) < abs($1.element - store.waveformFPS)
+                    })?.offset ?? 0)
+
+                    Slider(
+                        value: Binding(
+                            get: { currentIndex },
+                            set: { store.waveformFPS = steps[Int($0)] }
+                        ),
+                        in: 0...Double(steps.count - 1),
+                        step: 1
+                    )
+                    .frame(width: 140)
+
+                    Text("\(Int(store.waveformFPS))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, alignment: .trailing)
+                }
+            }
+        }
+    }
+
+    // MARK: - Spotify Connect
+
+    private var spotifySection: some View {
+        Section("Spotify Connect") {
+            Toggle("Show Spotify transfer menu", isOn: Binding(
+                get: { store.isSpotifyTransferEnabled },
+                set: { store.setSpotifyTransferEnabled($0) }
+            ))
+            .disabled(!store.isSpotifyDesktopReady && !store.isSpotifyTransferEnabled)
+
+            if store.isSpotifyTransferEnabled {
+                Text("Uses Spotify Desktop's bundled command-line helper. No Spotify API token or Client ID is required.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                LabeledContent("Status") {
+                    HStack(spacing: 8) {
+                        Label(spotifyStatusLabel, systemImage: store.isSpotifyDesktopReady ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundStyle(store.isSpotifyDesktopReady ? .green : .red)
+
+                        Button {
+                            Task { await store.refreshSpotifyDesktopState() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(store.isSpotifyRefreshing)
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Cloud
 
     private var cloudSection: some View {
-        Section("Sonos Cloud") {
-            TextField("Broker URL", text: Binding(
-                get: { store.cloudBrokerURLDraft },
-                set: { store.cloudBrokerURLDraft = $0 }
-            ))
-
-            Text("The broker keeps the Sonos client secret server-side and exchanges tokens on behalf of OpenSonos.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        Section {
+            if isEditingBrokerURL {
+                TextField("Broker URL", text: Binding(
+                    get: { store.cloudBrokerURLDraft },
+                    set: { store.cloudBrokerURLDraft = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { isEditingBrokerURL = false }
+            }
 
             HStack {
-                Button("Save") {
-                    store.saveCloudConfiguration()
-                }
-
-                Button(store.isCloudConnected ? "Reconnect" : "Connect") {
-                    store.beginCloudAuthentication()
-                }
-
-                if store.isCloudConnected {
-                    Button("Disconnect", role: .destructive) {
+                Button(store.isCloudConnected ? "Disconnect" : "Connect", role: store.isCloudConnected ? .destructive : nil) {
+                    if store.isCloudConnected {
                         store.disconnectCloud()
+                    } else {
+                        store.beginCloudAuthentication()
                     }
                 }
 
@@ -231,6 +302,15 @@ struct SonosSettingsView: View {
                 Text(store.cloudStatusMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        } header: {
+            HStack {
+                Text("Sonos Cloud")
+                Spacer()
+                Button(isEditingBrokerURL ? "Done" : "Edit") {
+                    isEditingBrokerURL.toggle()
+                }
+                .textCase(nil)
             }
         }
     }
@@ -253,5 +333,13 @@ struct SonosSettingsView: View {
         let minutes = seconds / 60
         if minutes < 60 { return "\(minutes)m ago" }
         return date.formatted(date: .omitted, time: .shortened)
+    }
+
+    private var spotifyStatusLabel: String {
+        let status = store.spotifyDesktopStatus
+        if !status.helperInstalled { return "Helper missing" }
+        if !status.appRunning { return "Spotify not running" }
+        if !status.isLoggedIn { return "Not logged in" }
+        return "Ready"
     }
 }
